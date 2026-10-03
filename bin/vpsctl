@@ -398,14 +398,35 @@ cmd_deploy_docker() {
   apply_auth "docker-$name"
   sync_docker_route "$name" "$routes"
 
-  if [[ -z $routes ]]; then
-    info "Deployed $name. No service has a vps.domains label, so it is not reachable from outside."
-  else
-    info "Deployed $name:"
-    while read -r upstream domains; do
-      for d in ${domains//,/ }; do info "  https://$d  ->  $upstream"; done
-    done <<<"$routes"
+  local ports
+  ports=$(published_ports "$name")
+  info "Deployed $name."
+  while read -r upstream domains; do
+    for d in ${domains//,/ }; do info "  https://$d  ->  $upstream"; done
+  done <<<"$routes"
+  if [[ -n $ports ]]; then
+    info "  published ports: ${ports//,/, }"
+    info "  (Docker opens these to the internet regardless of UFW. Also allow them in the provider firewall.)"
   fi
+  if [[ -z $routes && -z $ports ]]; then
+    info "  No vps.domains label and no published ports, so it is not reachable from outside."
+  fi
+}
+
+# Host ports published by the app's running containers, e.g. "1234/tcp,1234/udp".
+# Ports bound to a specific address keep it ("127.0.0.1:8080/tcp"); public ones don't.
+published_ports() { # NAME
+  local ids
+  ids=$(docker ps -q --filter "label=com.docker.compose.project=$1")
+  [[ -n $ids ]] || return 0
+  # shellcheck disable=SC2086 # one argument per container id
+  docker inspect $ids | jq -r '
+    [ .[] | (.NetworkSettings.Ports // {}) | to_entries[] | select(.value != null)
+      | (.key | split("/")[1]) as $proto
+      | .value[]
+      | (if (.HostIp == "0.0.0.0" or .HostIp == "::" or .HostIp == "") then "" else .HostIp + ":" end)
+        + .HostPort + "/" + $proto ]
+    | unique | join(",")'
 }
 
 app_status() { # NAME
@@ -423,20 +444,22 @@ app_status() { # NAME
 }
 
 cmd_ls() {
-  local d host name domains
+  local d host name domains ports
   {
-    printf 'TYPE\tNAME\tDOMAINS\tSTATUS\tPASSWORD\n'
+    printf 'TYPE\tNAME\tDOMAINS\tPORTS\tSTATUS\tPASSWORD\n'
     for d in "$STATIC_DIR"/*/; do
       [[ -d $d ]] || continue
       host=$(basename "$d")
-      printf 'static\t%s\t%s\t%s\t%s\n' "$host" "$host" "-" "$(has_auth "static-$host")"
+      printf 'static\t%s\t%s\t-\t-\t%s\n' "$host" "$host" "$(has_auth "static-$host")"
     done
     for d in "$DOCKER_DIR"/*/; do
       [[ -d $d ]] || continue
       name=$(basename "$d")
       domains=$(snippet_domains "$SITES_DIR/docker-$name.caddy")
       domains=${domains// /,}
-      printf 'docker\t%s\t%s\t%s\t%s\n' "$name" "${domains:--}" "$(app_status "$name")" "$(has_auth "docker-$name")"
+      ports=$(published_ports "$name")
+      printf 'docker\t%s\t%s\t%s\t%s\t%s\n' \
+        "$name" "${domains:--}" "${ports:--}" "$(app_status "$name")" "$(has_auth "docker-$name")"
     done
   } | column -t -s $'\t'
 

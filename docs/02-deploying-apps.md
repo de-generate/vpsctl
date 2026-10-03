@@ -24,7 +24,7 @@ vps (bin/vps)  ── tar over SSH ──▶   vpsctl  ──▶ /srv/static/<ho
 
 - **Caddy** runs as a container on ports 80/443 and gets a Let's Encrypt certificate for every hostname it serves.
 - **Static sites** are served by a catch-all: a request for `foo.example.com` is answered from `/srv/static/foo.example.com/` if that folder exists. The certificate is requested on the first visit, only for hostnames that have a folder.
-- **Docker apps** get a generated route per service with a `vps.domains` label. vpsctl also attaches those services to the shared `caddy` network, so compose files don't need any network or port configuration. **Don't publish ports** (`ports:`); they'd bypass the firewall (see [future-improvements.md](future-improvements.md#docker-and-ufw)).
+- **Docker apps** get a generated route per service with a `vps.domains` label. vpsctl also attaches those services to the shared `caddy` network, so compose files don't need any network or port configuration. **Web apps don't publish ports** (`ports:`). Caddy reaches them over the network, and published ports bypass the firewall. Non-HTTP services are the exception, see [Non-HTTP services](#non-http-services-game-servers-voice-chat-).
 - Every deploy **replaces** the app folder completely. Persistent data goes in named volumes or `/srv/data/<name>/` (see [Data](#data)).
 
 ## Setting up the client
@@ -157,9 +157,10 @@ The password is sent over the SSH connection and only a bcrypt hash is stored on
 
 ```bash
 vps my-vps ls
-# TYPE    NAME               DOMAINS             STATUS       PASSWORD
-# static  todo.example.com   todo.example.com    -            -
-# docker  my-api             api.example.com     running 2/2  yes
+# TYPE    NAME               DOMAINS             PORTS              STATUS       PASSWORD
+# static  todo.example.com   todo.example.com    -                  -            -
+# docker  my-api             api.example.com     -                  running 2/2  yes
+# docker  mumble             -                   1234/tcp,1234/udp  running 1/1  -
 
 vps my-vps logs my-api            # last 200 lines
 vps my-vps logs my-api -f         # follow (Ctrl+C to stop)
@@ -197,6 +198,41 @@ Both locations are what a backup needs to cover later.
 - The whole folder, except `.git`, and also `node_modules` for docker deploys.
 - Extra patterns can go in a `.vpsignore` file in the folder (tar exclude patterns, one per line, e.g. `*.log`, `tmp`).
 - `.env` files **are** uploaded on purpose: that's how secrets reach the server without being in git.
+
+## Non-HTTP services (game servers, voice chat, …)
+
+Services that don't speak HTTP can't go through Caddy. They publish a port directly instead, e.g. a Mumble server:
+
+```yaml
+services:
+  mumble:
+    image: mumblevoip/mumble-server:latest
+    restart: unless-stopped
+    mem_limit: 128m
+    ports:
+      - "1234:64738/tcp"   # host port : container port
+      - "1234:64738/udp"   # many such services need UDP as well; TCP is the default
+    volumes:
+      - data:/data
+
+volumes:
+  data:
+```
+
+```bash
+vps my-vps deploy docker mumble ./mumble
+# Deployed mumble.
+#   published ports: 1234/tcp, 1234/udp
+```
+
+Things to know:
+
+- **UFW does not apply.** Docker opens published ports itself, on IPv4 and IPv6, as soon as the container runs. A `sudo ufw allow 1234` documents the intent but doesn't change anything. **The provider firewall is the real gate:** open the port there (TCP and/or UDP, and IPv6 if it has separate rules).
+- **Ports 80 and 443 belong to Caddy.** Any other free port works. Two apps can't publish the same host port; the second deploy fails with "port is already allocated".
+- **No Caddy protection.** TLS and `--password` only apply to HTTP routes, and fail2ban only watches SSH. Security is whatever the service itself provides (e.g. Mumble's own encryption and server password).
+- **Admin ports you don't want public:** bind them to localhost (`"127.0.0.1:8081:8080"`) and use an SSH tunnel: `ssh -L 8081:localhost:8081 my-vps`.
+- `vps <target> ls` shows published ports in the `PORTS` column. Localhost-only ports are listed with their address (`127.0.0.1:8081/tcp`).
+- An app can mix both: a web UI routed via `vps.domains` plus a published game port.
 
 ## Resource limits
 
