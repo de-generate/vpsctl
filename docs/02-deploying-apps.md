@@ -80,7 +80,7 @@ services:
     mem_limit: 64m
     labels:
       vps.domains: whoami.example.com
-      vps.port: "80"
+      vps.http-port: "80"
 ```
 
 ```bash
@@ -108,7 +108,7 @@ services:
       - /srv/data/my-api:/data
     labels:
       vps.domains: api.example.com, api.example2.com
-      vps.port: "8080"
+      vps.http-port: "8080"
   db:
     image: postgres:17          # pin major versions of databases!
     restart: unless-stopped
@@ -132,10 +132,12 @@ Working examples are in [`examples/`](../examples): `static-site`, `docker-image
 
 ## Labels
 
+`vps.domains` and `vps.http-port` together configure **HTTP routing through Caddy** (HTTPS, certificates, optional password). They only make sense for services that speak HTTP. For anything else, see [Non-HTTP services](#non-http-services-game-servers-voice-chat-).
+
 | Label | Meaning |
 |---|---|
-| `vps.domains` | Hostname(s) to route to this service, separated by commas or spaces. Required for the service to be reachable. |
-| `vps.port` | Port the service listens on inside the container. Default `80`. Quote it in YAML (`"8080"`). |
+| `vps.domains` | Hostname(s) Caddy routes to this service over HTTPS, separated by commas or spaces. Without it, the service gets no web route. |
+| `vps.http-port` | Port the service serves HTTP on *inside* the container (not a published host port). Default `80`. Quote it in YAML (`"8080"`). |
 | `vps.auto-update` | `"false"` excludes the service from the weekly automatic update. |
 
 A hostname can only belong to one app or static site; deploys that would take over someone else's hostname are refused.
@@ -227,6 +229,7 @@ vps my-vps deploy docker mumble ./mumble
 
 Things to know:
 
+- **No `vps.*` routing labels.** They create an HTTPS route in Caddy, which would only show a 502 for a non-HTTP service. The hostname works without them: with DNS pointing at the server, clients connect to `mumble.example.com:1234` directly.
 - **UFW does not apply.** Docker opens published ports itself, on IPv4 and IPv6, as soon as the container runs. A `sudo ufw allow 1234` documents the intent but doesn't change anything. **The provider firewall is the real gate:** open the port there (TCP and/or UDP, and IPv6 if it has separate rules).
 - **Ports 80 and 443 belong to Caddy.** Any other free port works. Two apps can't publish the same host port; the second deploy fails with "port is already allocated".
 - **No Caddy protection.** TLS and `--password` only apply to HTTP routes, and fail2ban only watches SSH. Security is whatever the service itself provides (e.g. Mumble's own encryption and server password).

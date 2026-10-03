@@ -56,7 +56,7 @@ To prevent it, keep `.gitattributes` and set your editor to LF for this repo.
 
 **502 Bad Gateway (Docker app).** Caddy can't reach the container:
 - `vps <target> ls`: is the app running? `vps <target> logs <name>` shows why not.
-- `vps.port` must be the port the app listens on *inside* the container, and the app must listen on `0.0.0.0`, not `127.0.0.1`.
+- `vps.http-port` must be the port the app listens on *inside* the container, and the app must listen on `0.0.0.0`, not `127.0.0.1`.
 
 **Routes are missing or stale**, e.g. after running `docker compose` by hand or restoring files: `vps <target> sync` regenerates all routes and compose overrides from what's in `/srv/docker` and `/srv/static`.
 

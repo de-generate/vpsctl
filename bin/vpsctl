@@ -261,12 +261,12 @@ routes_from_config() { # NAME CONFIG_JSON
     .services | to_entries[]
     | select((.value.labels["vps.domains"] // "") != "")
     | [ (.value.container_name // "\($p)-\(.key)-1"),
-        (.value.labels["vps.port"] // "80"),
+        (.value.labels["vps.http-port"] // "80"),
         (.value.labels["vps.domains"] | ascii_downcase | [splits("[,\\s]+")] | map(select(. != "")) | join(",")) ]
     | @tsv' <<<"$2")
   while IFS=$'\t' read -r upstream port domains; do
     [[ -n $upstream ]] || continue
-    [[ $port =~ ^[0-9]+$ ]] || die "Invalid vps.port label '$port'."
+    [[ $port =~ ^[0-9]+$ ]] || die "Invalid vps.http-port label '$port'."
     for d in ${domains//,/ }; do
       [[ $d =~ $HOST_RE ]] || die "Invalid domain '$d' in vps.domains label."
     done

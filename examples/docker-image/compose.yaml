@@ -10,4 +10,4 @@ services:
     mem_limit: 64m
     labels:
       vps.domains: whoami.example.com
-      vps.port: "80"
+      vps.http-port: "80"

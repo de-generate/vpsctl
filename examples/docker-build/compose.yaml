@@ -14,7 +14,7 @@ services:
       - data:/data
     labels:
       vps.domains: counter.example.com
-      vps.port: "8000"
+      vps.http-port: "8000"
 
 volumes:
   data:
