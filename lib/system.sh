@@ -16,17 +16,24 @@ configure_hostname() {
   log "Setting hostname to '$VPS_HOSTNAME'"
   hostnamectl set-hostname "$VPS_HOSTNAME"
 
+  # /etc/hosts has no drop-in directory, so its 127.0.1.1 line is edited in place
+  # (an accepted exception, see AGENTS.md). VPS_HOSTNAME is validated in load_config.
+  # For a FQDN, the short name is kept as an alias.
+  local entry="127.0.1.1 $VPS_HOSTNAME"
+  if [[ $VPS_HOSTNAME == *.* ]]; then entry+=" ${VPS_HOSTNAME%%.*}"; fi
   if grep -q '^127\.0\.1\.1' /etc/hosts; then
-    sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $VPS_HOSTNAME/" /etc/hosts
+    sed -i "s/^127\.0\.1\.1.*/$entry/" /etc/hosts
   else
-    echo "127.0.1.1 $VPS_HOSTNAME" >>/etc/hosts
+    echo "$entry" >>/etc/hosts
   fi
 
-  # Stop cloud-init (used by most VPS providers) from resetting the hostname on reboot.
+  # Stop cloud-init (used by most VPS providers) from resetting the hostname and
+  # regenerating /etc/hosts on reboot.
   if [[ -d /etc/cloud/cloud.cfg.d ]]; then
     write_file /etc/cloud/cloud.cfg.d/99-vps-setup-hostname.cfg <<EOF
 $MANAGED_HEADER
 preserve_hostname: true
+manage_etc_hosts: false
 EOF
   fi
 }

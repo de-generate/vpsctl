@@ -134,6 +134,7 @@ https:// {
 
 	@site {
 		# Strict hostname check, so the Host header can't point root outside /srv/static.
+		# SECURITY BOUNDARY - keep in sync with HOST_RE in bin/vpsctl.
 		expression \`{host}.matches("^[a-z0-9-]+([.][a-z0-9-]+)+$")\`
 		file {
 			root /srv/static

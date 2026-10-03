@@ -9,7 +9,7 @@ $MANAGED_HEADER
 [DEFAULT]
 # Read logs from the systemd journal (works even without rsyslog / auth.log)
 backend = systemd
-ignoreip = 127.0.0.1/8 ::1
+ignoreip = 127.0.0.1/8 ::1${FAIL2BAN_IGNOREIP:+ $FAIL2BAN_IGNOREIP}
 findtime = 10m
 maxretry = 5
 bantime = 1h

@@ -11,8 +11,9 @@ step_user() {
   fi
   usermod -aG sudo "$VPS_USER"
 
-  # sudo asks for this password. SSH login itself is key-only, so the password is
-  # a second factor for becoming root, not a way to log in.
+  # sudo asks for this password; SSH login itself is key-only. NOTE: this is not a real
+  # second factor - the user is also in the docker group (step docker), which allows
+  # becoming root without it. The SSH key is what protects the server.
   if [[ $(passwd -S "$VPS_USER" | awk '{print $2}') != P ]]; then
     [[ -t 0 ]] || die "User '$VPS_USER' has no password and stdin is not a terminal. Run setup.sh interactively."
     info "Choose a password for '$VPS_USER' (used for sudo, not for SSH login):"
@@ -28,13 +29,16 @@ step_user() {
   touch "$keys_file"
 
   log "Installing SSH keys for '$VPS_USER'"
+  if [[ -n $SSH_PUBKEY ]] && ! ssh-keygen -lf - <<<"$SSH_PUBKEY" &>/dev/null; then
+    die "SSH_PUBKEY is not a valid public key. Paste the whole line, e.g. 'ssh-ed25519 AAAA... you@pc'."
+  fi
   {
     if [[ -n $SSH_PUBKEY ]]; then printf '%s\n' "$SSH_PUBKEY"; fi
     # Reuse root's keys. Providers sometimes prefix them with options such as
     # command="echo 'Please login as ...'", so only keep "<type> <key> [comment]".
     if [[ -f /root/.ssh/authorized_keys ]]; then extract_pubkeys </root/.ssh/authorized_keys; fi
   } | while IFS= read -r key; do
-    [[ -n $key ]] || continue
+    [[ -n $(awk '{print $2}' <<<"$key") ]] || continue
     if ! grep -qF -- "$(awk '{print $2}' <<<"$key")" "$keys_file"; then
       printf '%s\n' "$key" >>"$keys_file"
       info "added: $(ssh-keygen -lf - <<<"$key" 2>/dev/null || echo "$key")"

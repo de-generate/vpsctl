@@ -1,7 +1,8 @@
 # Step: firewall - UFW with deny-incoming / allow-outgoing defaults.
 #
-# NOTE: Docker publishes container ports by writing its own iptables rules, which
-# bypass UFW entirely. See docs/future-improvements.md before installing Docker.
+# NOTE: ports published by Docker containers bypass UFW (Docker writes its own iptables
+# rules). Only Caddy (80/443) and deliberately published non-HTTP services do that; see
+# "Non-HTTP services" in docs/02-deploying-apps.md.
 
 step_firewall() {
   log "Configuring UFW firewall"

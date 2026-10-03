@@ -49,6 +49,7 @@ remote() {
   ssh -- "$TARGET" "vpsctl$(printf ' %q' "$@")"
 }
 
+# Same list as compose_file in bin/vpsctl.
 has_compose_file() {
   local f
   for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do

@@ -16,7 +16,10 @@ SSH_PORT="22"
 # Space-separated users allowed to log in over SSH. Defaults to VPS_USER.
 # SSH_ALLOW_USERS="vps"
 
-# Hostname. Leave empty to keep the provider's hostname.
+# IPs/CIDRs fail2ban never bans, space-separated (e.g. your static home IP).
+FAIL2BAN_IGNOREIP=""
+
+# Hostname (short name or FQDN). Leave empty to keep the provider's hostname.
 VPS_HOSTNAME=""
 
 # Timezone, see: timedatectl list-timezones

@@ -28,11 +28,15 @@ step_docker() {
 
   # shellcheck source=/dev/null
   . /etc/os-release
+  local suite=${UBUNTU_CODENAME:-$VERSION_CODENAME}
+  # Docker's repo usually gets new Ubuntu releases a few weeks after they come out.
+  curl -fsI "https://download.docker.com/linux/ubuntu/dists/$suite/Release" >/dev/null \
+    || die "Docker's apt repository doesn't support Ubuntu '$suite' (yet). Use an LTS release."
   write_file /etc/apt/sources.list.d/docker.sources <<EOF
 $MANAGED_HEADER
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
-Suites: ${UBUNTU_CODENAME:-$VERSION_CODENAME}
+Suites: $suite
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF

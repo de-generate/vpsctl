@@ -25,6 +25,8 @@ CADDY_IMAGE=caddy:2
 # and Caddy join. Apps can't reach each other, and their service names can't collide.
 APP_NETWORK_PREFIX=vps-
 
+# Keep in sync with the hostname checks in the Caddyfile (lib/caddy.sh). This one is
+# stricter; the Caddyfile regex is the security boundary against Host-header traversal.
 HOST_RE='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
 # Compose project name rules minus dots, so app names can never be confused with hostnames.
 NAME_RE='^[a-z0-9][a-z0-9_-]*$'
@@ -98,6 +100,7 @@ app_dir() {
   if [[ $1 == caddy ]]; then echo "$CADDY_DIR"; else echo "$DOCKER_DIR/$1"; fi
 }
 
+# Same list as has_compose_file in bin/vps (the client must stay standalone).
 compose_file() {
   local f
   for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
@@ -279,16 +282,20 @@ sync_static_route() { # HOST [--pending]
 
 # Prints one line per routed service: "<container>:<port> <domain>[,<domain>...]".
 routes_from_config() { # NAME CONFIG_JSON
-  local lines upstream port domains d
+  local lines service network_mode upstream port domains d
   lines=$(jq -r --arg p "$1" '
     .services | to_entries[]
     | select((.value.labels["vps.domains"] // "") != "")
-    | [ (.value.container_name // "\($p)-\(.key)-1"),
+    | [ .key,
+        (.value.network_mode // "-"),
+        (.value.container_name // "\($p)-\(.key)-1"),
         (.value.labels["vps.http-port"] // "80"),
         (.value.labels["vps.domains"] | ascii_downcase | [splits("[,\\s]+")] | map(select(. != "")) | join(",")) ]
     | @tsv' <<<"$2")
-  while IFS=$'\t' read -r upstream port domains; do
+  while IFS=$'\t' read -r service network_mode upstream port domains; do
     [[ -n $upstream ]] || continue
+    [[ $network_mode == - ]] \
+      || die "Service '$service' uses network_mode '$network_mode', so Caddy can't reach it. Remove vps.domains or network_mode."
     [[ $upstream =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "Invalid container name '$upstream'."
     [[ $port =~ ^[0-9]+$ ]] || die "Invalid vps.http-port label '$port'."
     for d in ${domains//,/ }; do
@@ -383,6 +390,17 @@ reconnect_app_networks() {
   done
 }
 
+# Without a restart policy, a service stays down after a reboot (e.g. the automatic one
+# after kernel updates) or a Docker upgrade.
+warn_restart_policy() { # CONFIG_JSON
+  local service
+  jq -r '.services | to_entries[] | select((.value.restart // "no") == "no") | .key' <<<"$1" \
+    | while read -r service; do
+      warn "Service '$service' has no restart policy and won't come back after a reboot." \
+        "Add 'restart: unless-stopped'."
+    done
+}
+
 warn_bind_mounts() { # CONFIG_JSON DIR NAME
   local src
   jq -r --arg dir "$2/" '
@@ -448,6 +466,7 @@ cmd_deploy_docker() {
   routes=$(routes_from_config "$name" "$config")
   check_domains "$name" "$routes"
   warn_bind_mounts "$config" "$staging" "$name"
+  warn_restart_policy "$config"
 
   apply_auth "docker-$name"
   replace_dir "$staging" "$DOCKER_DIR/$name"
@@ -528,6 +547,24 @@ cmd_ls() {
 
   if [[ $(docker inspect -f '{{.State.Running}}' "$CADDY_CONTAINER" 2>/dev/null) != true ]]; then
     warn "The caddy container is not running - nothing is reachable. Check: vpsctl logs caddy"
+  fi
+  auto_update_status
+}
+
+# One line about the last weekly auto-update, so a failure doesn't go unnoticed.
+auto_update_status() {
+  local unit=vps-auto-update.service result when
+  [[ $(systemctl show -p LoadState --value "$unit" 2>/dev/null) == loaded ]] || return 0
+  when=$(systemctl show -p ExecMainExitTimestamp --value "$unit")
+  if [[ -z $when || $when == n/a ]]; then
+    info "Auto-update: has not run yet."
+    return 0
+  fi
+  result=$(systemctl show -p Result --value "$unit")
+  if [[ $result == success ]]; then
+    info "Auto-update: last run $when (ok)."
+  else
+    warn "Last auto-update ($when) FAILED. Check: journalctl -u vps-auto-update"
   fi
 }
 

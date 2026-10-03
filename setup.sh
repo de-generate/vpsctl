@@ -58,9 +58,23 @@ load_config() {
   DOCKER_AUTO_UPGRADE=${DOCKER_AUTO_UPGRADE:-true}
   AUTO_UPDATE=${AUTO_UPDATE:-true}
   AUTO_UPDATE_SCHEDULE=${AUTO_UPDATE_SCHEDULE:-Sun *-*-* 03:00}
+  FAIL2BAN_IGNOREIP=${FAIL2BAN_IGNOREIP:-}
 
-  [[ $VPS_USER =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid VPS_USER '$VPS_USER'."
-  [[ $SSH_PORT =~ ^[0-9]+$ ]] && (( SSH_PORT > 0 && SSH_PORT < 65536 )) || die "Invalid SSH_PORT '$SSH_PORT'."
+  # Values end up in system config files, so validate all of them.
+  local user_re='^[a-z_][a-z0-9_-]*$' user
+  [[ $VPS_USER =~ $user_re ]] || die "Invalid VPS_USER '$VPS_USER'."
+  [[ -n ${SSH_ALLOW_USERS// /} ]] || die "SSH_ALLOW_USERS must not be empty."
+  for user in $SSH_ALLOW_USERS; do
+    [[ $user =~ $user_re ]] || die "Invalid user '$user' in SSH_ALLOW_USERS."
+  done
+  # No leading zeros: (( )) would read "022" as octal.
+  if ! [[ $SSH_PORT =~ ^[1-9][0-9]{0,4}$ ]] || (( SSH_PORT > 65535 )); then die "Invalid SSH_PORT '$SSH_PORT'."; fi
+  [[ -z $VPS_HOSTNAME || $VPS_HOSTNAME =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$ ]] \
+    || die "Invalid VPS_HOSTNAME '$VPS_HOSTNAME' (lowercase letters, digits, - and dots)."
+  [[ $SWAP_SIZE =~ ^(0|[1-9][0-9]*[KMG])$ ]] || die "Invalid SWAP_SIZE '$SWAP_SIZE' (e.g. 2G, 512M or 0)."
+  if ! [[ $SWAPPINESS =~ ^[0-9]{1,3}$ ]] || (( 10#$SWAPPINESS > 100 )); then die "SWAPPINESS must be 0-100."; fi
+  [[ $AUTO_REBOOT_TIME =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || die "Invalid AUTO_REBOOT_TIME '$AUTO_REBOOT_TIME' (HH:MM)."
+  [[ $FAIL2BAN_IGNOREIP =~ ^[0-9A-Fa-f.:/\ ]*$ ]] || die "Invalid FAIL2BAN_IGNOREIP '$FAIL2BAN_IGNOREIP' (IPs/CIDRs, space-separated)."
   [[ $AUTO_REBOOT =~ ^(true|false)$ ]] || die "AUTO_REBOOT must be 'true' or 'false'."
   [[ $DOCKER_AUTO_UPGRADE =~ ^(true|false)$ ]] || die "DOCKER_AUTO_UPGRADE must be 'true' or 'false'."
   [[ $AUTO_UPDATE =~ ^(true|false)$ ]] || die "AUTO_UPDATE must be 'true' or 'false'."

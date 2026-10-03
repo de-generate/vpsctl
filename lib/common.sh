@@ -33,6 +33,7 @@ write_file() {
   cat >"$tmp"
   if [[ -f $path ]] && cmp -s "$tmp" "$path"; then
     rm -f "$tmp"
+    chown root:root "$path"
     chmod "$mode" "$path"
     WRITE_FILE_CHANGED=false
     info "unchanged $path"
@@ -40,8 +41,10 @@ write_file() {
   fi
   install -D -m "$mode" -o root -g root "$tmp" "$path"
   rm -f "$tmp"
+  # shellcheck disable=SC2034 # read by the steps
   WRITE_FILE_CHANGED=true
   info "wrote $path"
 }
 
+# shellcheck disable=SC2034 # used in the steps' heredocs
 MANAGED_HEADER="# Managed by vps-setup - local changes will be overwritten when setup.sh runs again."
