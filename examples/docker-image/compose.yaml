@@ -1,0 +1,13 @@
+# A ready-made image, no build step. Deploy with:
+#   vps <target> deploy docker whoami examples/docker-image
+#
+# Change the domain below first. vpsctl attaches routed services to the proxy
+# network automatically, so no networks or ports are needed.
+services:
+  web:
+    image: traefik/whoami:latest
+    restart: unless-stopped
+    mem_limit: 64m
+    labels:
+      vps.domains: whoami.example.com
+      vps.port: "80"

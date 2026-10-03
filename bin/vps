@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+#
+# vps - deploy and manage apps on a server set up with vps-setup.
+#
+# Runs on your own machine (Linux, macOS, WSL or Git Bash on Windows) and calls `vpsctl`
+# on the server over SSH. Only needs bash, ssh and tar. Put this repo's bin/ on your PATH.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: vps <ssh-target> <command> [args]
+
+<ssh-target> is anything ssh accepts: a Host from ~/.ssh/config, or user@host.
+
+Commands:
+  deploy static <hostname> <dir> [auth]    Upload a folder of static files -> https://<hostname>
+  deploy docker <name> <dir> [auth]        Upload a compose project and start it (built on the server)
+  ls                                       List static sites and Docker apps
+  logs <name> [-f] [--tail N]              Logs of a Docker app ("caddy" for the proxy)
+  restart <name>                           Restart a Docker app
+  update <name> | --all                    Pull new images, rebuild with fresh base images, restart
+  rm <name|hostname> [--volumes] [--yes]   Remove an app or site (--volumes also deletes named volumes)
+  sync                                     Regenerate all routes from what's on the server
+  help                                     Server-side help (vpsctl)
+
+Auth options for deploy (HTTP basic auth):
+  --password           Ask for a password
+  --password=VALUE     Use VALUE (ends up in your shell history)
+  --user NAME          Username (default: user)
+  --no-password        Remove a previously set password
+  Without these options, an existing password stays in place.
+
+Files listed in <dir>/.vpsignore (tar exclude patterns, one per line) are not uploaded.
+.git is never uploaded, node_modules is skipped for docker deploys.
+
+Examples:
+  vps my-vps deploy static todo.example.com ./dist
+  vps my-vps deploy docker my-api ./my-api --password
+  vps my-vps logs my-api -f
+EOF
+}
+
+die() { printf 'vps: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'vps: warning: %s\n' "$*" >&2; }
+
+# Runs vpsctl on the target with safely quoted arguments; stdin is passed through.
+remote() {
+  ssh -- "$TARGET" "vpsctl$(printf ' %q' "$@")"
+}
+
+has_compose_file() {
+  local f
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    if [[ -f $1/$f ]]; then return 0; fi
+  done
+  return 1
+}
+
+cmd_deploy() {
+  (( $# >= 3 )) || die "Usage: vps <target> deploy static|docker <name> <dir> [auth options]"
+  local type=$1 name=$2 dir=$3 password="" ask=false no_password=false user="" again
+  shift 3
+  while (( $# )); do
+    case $1 in
+      --password) ask=true ;;
+      --password=*) password=${1#*=}; [[ -n $password ]] || die "Empty password." ;;
+      --user) (( $# >= 2 )) || die "--user needs a value."; user=$2; shift ;;
+      --user=*) user=${1#*=} ;;
+      --no-password) no_password=true ;;
+      *) die "Unknown option '$1'." ;;
+    esac
+    shift
+  done
+
+  [[ -d $dir ]] || die "'$dir' is not a directory."
+  local excludes=(--exclude=.git)
+  case $type in
+    static)
+      name=$(tr '[:upper:]' '[:lower:]' <<<"$name")
+      [[ -f $dir/index.html ]] || warn "no index.html in $dir"
+      ;;
+    docker)
+      has_compose_file "$dir" || die "No compose.yaml (or docker-compose.yml) in '$dir'."
+      excludes+=(--exclude=node_modules)
+      ;;
+    *) die "Unknown deploy type '$type' (use 'static' or 'docker')." ;;
+  esac
+  if [[ -f $dir/.vpsignore ]]; then excludes+=(-X "$dir/.vpsignore"); fi
+
+  if $ask; then
+    [[ -z $password ]] || die "Use either --password or --password=VALUE."
+    read -rsp "Password for $name: " password </dev/tty; echo >&2
+    read -rsp "Repeat password: " again </dev/tty; echo >&2
+    [[ -n $password ]] || die "Empty password."
+    [[ $password == "$again" ]] || die "Passwords don't match."
+  fi
+  if $no_password && [[ -n $password ]]; then die "--no-password can't be combined with a password."; fi
+  if [[ -n $user && -z $password ]]; then die "--user only works together with --password."; fi
+
+  local args=(deploy "$type" "$name")
+  if [[ -n $password ]]; then args+=(--password-stdin --user "${user:-user}"); fi
+  if $no_password; then args+=(--no-password); fi
+
+  printf 'Uploading %s to %s...\n' "$dir" "$TARGET" >&2
+  {
+    # The password (if any) goes first, on its own line, followed by the archive.
+    if [[ -n $password ]]; then printf '%s\n' "$password"; fi
+    COPYFILE_DISABLE=1 tar -czf - "${excludes[@]}" -C "$dir" .
+  } | remote "${args[@]}"
+}
+
+cmd_rm() {
+  (( $# >= 1 )) || die "Usage: vps <target> rm <name|hostname> [--volumes] [--yes]"
+  local name=$1 yes=false answer
+  local args=(rm "$1")
+  shift
+  while (( $# )); do
+    case $1 in
+      -y|--yes) yes=true ;;
+      --volumes) args+=(--volumes) ;;
+      *) die "Unknown option '$1'." ;;
+    esac
+    shift
+  done
+  if ! $yes; then
+    read -rp "Remove '$name' from $TARGET? Its files will be deleted. Type the name to confirm: " answer </dev/tty
+    [[ $answer == "$name" ]] || die "Aborted."
+  fi
+  remote "${args[@]}"
+}
+
+cmd_logs() {
+  # With a terminal, allocate one remotely too, so Ctrl+C stops `logs -f` on the server.
+  if [[ -t 0 && -t 1 ]]; then
+    ssh -t -- "$TARGET" "vpsctl logs$(printf ' %q' "$@")"
+  else
+    remote logs "$@"
+  fi
+}
+
+main() {
+  case ${1:-} in
+    ""|-h|--help|help) usage; exit 0 ;;
+    -*) die "The first argument must be an ssh target. See: vps --help" ;;
+  esac
+  TARGET=$1
+  shift
+  (( $# )) || { usage; exit 1; }
+  local cmd=$1
+  shift
+  case $cmd in
+    deploy) cmd_deploy "$@" ;;
+    rm|remove) cmd_rm "$@" ;;
+    logs) cmd_logs "$@" ;;
+    *) remote "$cmd" "$@" ;;
+  esac
+}
+
+main "$@"

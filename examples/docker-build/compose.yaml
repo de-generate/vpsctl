@@ -1,0 +1,20 @@
+# A custom app, built on the server from the Dockerfile next to this file. Deploy with:
+#   vps <target> deploy docker counter examples/docker-build
+#
+# Persistent data lives in a named volume, so it survives redeploys. (Files inside the
+# app folder are replaced on every deploy; the alternative is a bind mount to /srv/data/<name>/.)
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    mem_limit: 64m
+    environment:
+      GREETING: ${GREETING:-Hello}   # e.g. set in a .env file next to this one (uploaded, not committed)
+    volumes:
+      - data:/data
+    labels:
+      vps.domains: counter.example.com
+      vps.port: "8000"
+
+volumes:
+  data:

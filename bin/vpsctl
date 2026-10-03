@@ -1,0 +1,651 @@
+#!/usr/bin/env bash
+#
+# vpsctl - deploy and manage static sites and Docker apps on this server.
+#
+# Installed to /usr/local/bin/vpsctl by setup.sh (step "vpsctl"). Usually called over SSH
+# by the `vps` client (bin/vps), but works the same when logged in to the server.
+#
+# Routing: Caddy runs as a container (see lib/caddy.sh). Static sites without a password
+# are served by its catch-all. Every Docker app and every password-protected static site
+# gets a generated snippet in $SITES_DIR, after which Caddy is reloaded.
+
+set -euo pipefail
+
+STATIC_DIR=/srv/static
+DOCKER_DIR=/srv/docker
+DATA_DIR=/srv/data
+STATE_DIR=/srv/vps
+CADDY_DIR=$STATE_DIR/caddy
+SITES_DIR=$CADDY_DIR/etc/sites
+AUTH_DIR=$STATE_DIR/auth
+OVERRIDES_DIR=$STATE_DIR/overrides
+CADDY_CONTAINER=caddy
+CADDY_IMAGE=caddy:2
+PROXY_NETWORK=caddy
+
+HOST_RE='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+# Compose project name rules minus dots, so app names can never be confused with hostnames.
+NAME_RE='^[a-z0-9][a-z0-9_-]*$'
+USER_RE='^[A-Za-z0-9._-]+$'
+
+usage() {
+  cat <<'EOF'
+Usage: vpsctl <command> [args]
+
+  deploy static <hostname> [auth]   Read a .tar.gz from stdin into /srv/static/<hostname>/
+  deploy docker <name> [auth]       Read a .tar.gz from stdin into /srv/docker/<name>/, then
+                                    docker compose up -d --build
+  ls                                List static sites and Docker apps
+  logs <name> [compose logs args]   Logs of a Docker app ("caddy" for the proxy)
+  restart <name>                    Restart a Docker app
+  update <name> | --all [--auto]    Pull images, rebuild with fresh base images, restart.
+                                    --auto: only pull image-based services that don't have
+                                    the label vps.auto-update: "false" (used by the timer)
+  rm <name|hostname> [--volumes]    Remove an app or static site
+  sync                              Regenerate all Caddy routes and compose overrides
+
+Auth options for deploy (HTTP basic auth):
+  --password-stdin    Read the password from the first line of stdin (before the archive)
+  --user NAME         Username (default: user)
+  --no-password       Remove the password
+  Without these, an existing password stays in place.
+EOF
+}
+
+info() { printf '%s\n' "$*"; }
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+CLEANUP=()
+cleanup() {
+  local p
+  for p in "${CLEANUP[@]}"; do
+    if [[ -e $p ]]; then force_rm "$p"; fi
+  done
+}
+trap cleanup EXIT
+
+# Deletes a directory. Containers sometimes create root-owned files inside bind mounts,
+# which this user can't delete, so fall back to deleting from inside a container.
+force_rm() {
+  rm -rf -- "$1" 2>/dev/null && return 0
+  docker run --rm -v "$(dirname -- "$1"):/parent" --entrypoint rm "$CADDY_IMAGE" -rf "/parent/$(basename -- "$1")"
+}
+
+lock() {
+  exec 9>"$STATE_DIR/.lock"
+  flock -w 900 9 || die "Timed out waiting for another vpsctl operation to finish."
+}
+
+validate_name() {
+  [[ $1 =~ $NAME_RE ]] || die "Invalid app name '$1' (lowercase letters, digits, - and _)."
+  [[ $1 != caddy ]] || die "'caddy' is reserved for the reverse proxy."
+}
+
+require_app() {
+  [[ -n ${1:-} ]] || die "Missing app name."
+  if [[ $1 == caddy ]]; then return 0; fi
+  [[ $1 =~ $NAME_RE && -d $DOCKER_DIR/$1 ]] || die "No Docker app named '$1'. See: vpsctl ls"
+}
+
+app_dir() {
+  if [[ $1 == caddy ]]; then echo "$CADDY_DIR"; else echo "$DOCKER_DIR/$1"; fi
+}
+
+compose_file() {
+  local f
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    if [[ -f $1/$f ]]; then echo "$1/$f"; return 0; fi
+  done
+  return 1
+}
+
+# docker compose for a deployed app (or "caddy"), with the vpsctl override applied.
+dc() {
+  local name=$1 dir file
+  shift
+  dir=$(app_dir "$name")
+  file=$(compose_file "$dir") || die "No compose file in $dir."
+  local args=(-p "$name" --project-directory "$dir" -f "$file")
+  if [[ -f $OVERRIDES_DIR/$name.yaml ]]; then args+=(-f "$OVERRIDES_DIR/$name.yaml"); fi
+  docker compose "${args[@]}" "$@"
+}
+
+# Resolved compose config (JSON) of the project in DIR, without the vpsctl override.
+compose_config() { # NAME DIR
+  local file
+  file=$(compose_file "$2") || die "No compose.yaml (or compose.yml / docker-compose.yml) found."
+  docker compose -p "$1" --project-directory "$2" -f "$file" config --format json
+}
+
+caddy_reload() {
+  local out
+  out=$(docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1) && return 0
+  printf '%s\n' "$out" >&2
+  return 1
+}
+
+# install_snippet TARGET [NEW_FILE] - installs NEW_FILE as TARGET (or removes TARGET when
+# NEW_FILE is omitted) and reloads Caddy. Restores the previous state if Caddy rejects it.
+install_snippet() {
+  local target=$1 new=${2:-} backup=""
+  if [[ -n $new && -f $target ]] && cmp -s "$new" "$target"; then rm -f "$new"; return 0; fi
+  if [[ -z $new && ! -f $target ]]; then return 0; fi
+
+  if [[ -f $target ]]; then backup=$(mktemp); cp "$target" "$backup"; fi
+  if [[ -n $new ]]; then install -m 644 "$new" "$target"; rm -f "$new"; else rm -f "$target"; fi
+
+  if ! caddy_reload; then
+    if [[ -n $backup ]]; then install -m 644 "$backup" "$target"; rm -f "$backup"; else rm -f "$target"; fi
+    caddy_reload >/dev/null 2>&1 || true
+    die "Caddy rejected the new configuration (see above). The previous routes are still active."
+  fi
+  rm -f "$backup"
+}
+
+auth_block() { # AUTH_FILE
+  local user hash
+  if [[ -f $1 ]]; then
+    read -r user hash <"$1"
+    printf '\tbasic_auth {\n\t\t%s %s\n\t}\n' "$user" "$hash"
+  fi
+}
+
+has_auth() {
+  if [[ -f $AUTH_DIR/$1 ]]; then echo yes; else echo -; fi
+}
+
+snippet_domains() { # SNIPPET_FILE - prints the domains listed in its "# domains:" line
+  if [[ -f $1 ]]; then sed -n 's/^# domains: //p' "$1"; fi
+}
+
+# Prints who already serves DOMAIN (empty if nobody), ignoring the Docker app named EXCEPT.
+domain_owner() { # DOMAIN [EXCEPT]
+  local domain=$1 except=${2:-} f app d
+  if [[ -d $STATIC_DIR/$domain ]]; then echo "static site $domain"; return 0; fi
+  for f in "$SITES_DIR"/docker-*.caddy; do
+    [[ -f $f ]] || continue
+    app=${f##*/docker-}
+    app=${app%.caddy}
+    [[ $app != "$except" ]] || continue
+    for d in $(snippet_domains "$f"); do
+      if [[ $d == "$domain" ]]; then echo "Docker app '$app'"; return 0; fi
+    done
+  done
+}
+
+# ---------------------------------------------------------------------------
+# uploads and auth
+# ---------------------------------------------------------------------------
+
+parse_deploy_opts() {
+  PASSWORD_STDIN=false NO_PASSWORD=false AUTH_USER=user PASSWORD=""
+  while (( $# )); do
+    case $1 in
+      --password-stdin) PASSWORD_STDIN=true ;;
+      --no-password) NO_PASSWORD=true ;;
+      --user) (( $# >= 2 )) || die "--user needs a value."; AUTH_USER=$2; shift ;;
+      *) die "Unknown option '$1'." ;;
+    esac
+    shift
+  done
+  [[ $AUTH_USER =~ $USER_RE ]] || die "Invalid username '$AUTH_USER'."
+  if $PASSWORD_STDIN && $NO_PASSWORD; then die "--password-stdin and --no-password exclude each other."; fi
+  if $PASSWORD_STDIN; then
+    # Bash reads pipes byte by byte here, so the archive that follows stays intact.
+    IFS= read -r PASSWORD || die "Expected a password on the first line of stdin."
+    [[ -n $PASSWORD ]] || die "Empty password."
+  fi
+}
+
+apply_auth() { # KEY
+  local hash
+  if $NO_PASSWORD; then
+    rm -f "$AUTH_DIR/$1"
+  elif $PASSWORD_STDIN; then
+    hash=$(printf '%s\n' "$PASSWORD" | docker exec -i "$CADDY_CONTAINER" caddy hash-password 2>/dev/null) \
+      || die "Hashing the password failed. Is the caddy container running?"
+    [[ $hash == '$2'* ]] || die "Unexpected output from 'caddy hash-password'."
+    (umask 077 && printf '%s %s\n' "$AUTH_USER" "$hash" >"$AUTH_DIR/$1")
+  fi
+}
+
+extract_upload() { # DEST
+  tar -xzf - -C "$1" --no-same-owner --warning=no-unknown-keyword --warning=no-timestamp \
+    || die "Could not unpack the upload."
+  chmod -R u+rwX,go+rX,go-w "$1"
+  [[ -n $(ls -A "$1") ]] || die "The upload is empty."
+}
+
+# Moves NEW to TARGET, replacing whatever was there.
+replace_dir() { # NEW TARGET
+  local old=""
+  if [[ -e $2 ]]; then
+    old="$(dirname -- "$2")/.old-$(basename -- "$2")-$$"
+    mv -- "$2" "$old"
+  fi
+  mv -- "$1" "$2"
+  if [[ -n $old ]]; then force_rm "$old"; fi
+}
+
+# ---------------------------------------------------------------------------
+# routes
+# ---------------------------------------------------------------------------
+
+sync_static_route() { # HOST
+  local host=$1 auth=$AUTH_DIR/static-$1 tmp
+  if [[ -f $auth && -d $STATIC_DIR/$host ]]; then
+    tmp=$(mktemp)
+    {
+      echo "# Managed by vpsctl - password-protected static site. Regenerated on deploy and sync."
+      echo "# domains: $host"
+      echo "$host {"
+      auth_block "$auth"
+      printf '\timport static_files %s/%s\n' "$STATIC_DIR" "$host"
+      echo "}"
+    } >"$tmp"
+    install_snippet "$SITES_DIR/static-$host.caddy" "$tmp"
+  else
+    install_snippet "$SITES_DIR/static-$host.caddy"
+  fi
+}
+
+# Prints one line per routed service: "<container>:<port> <domain>[,<domain>...]".
+routes_from_config() { # NAME CONFIG_JSON
+  local lines upstream port domains d
+  lines=$(jq -r --arg p "$1" '
+    .services | to_entries[]
+    | select((.value.labels["vps.domains"] // "") != "")
+    | [ (.value.container_name // "\($p)-\(.key)-1"),
+        (.value.labels["vps.port"] // "80"),
+        (.value.labels["vps.domains"] | ascii_downcase | [splits("[,\\s]+")] | map(select(. != "")) | join(",")) ]
+    | @tsv' <<<"$2")
+  while IFS=$'\t' read -r upstream port domains; do
+    [[ -n $upstream ]] || continue
+    [[ $port =~ ^[0-9]+$ ]] || die "Invalid vps.port label '$port'."
+    for d in ${domains//,/ }; do
+      [[ $d =~ $HOST_RE ]] || die "Invalid domain '$d' in vps.domains label."
+    done
+    printf '%s:%s %s\n' "$upstream" "$port" "$domains"
+  done <<<"$lines"
+}
+
+check_domains() { # NAME ROUTES
+  local seen=" " upstream domains d owner
+  while read -r upstream domains; do
+    [[ -n $upstream ]] || continue
+    for d in ${domains//,/ }; do
+      [[ $seen != *" $d "* ]] || die "Domain $d is listed more than once."
+      seen+="$d "
+      owner=$(domain_owner "$d" "$1")
+      [[ -z $owner ]] || die "Domain $d is already served by $owner."
+    done
+  done <<<"$2"
+}
+
+sync_docker_route() { # NAME ROUTES
+  local name=$1 routes=$2 auth=$AUTH_DIR/docker-$1 tmp upstream domains all=""
+  if [[ -z $routes || ! -d $DOCKER_DIR/$name ]]; then
+    install_snippet "$SITES_DIR/docker-$name.caddy"
+    return 0
+  fi
+  while read -r upstream domains; do all+=" ${domains//,/ }"; done <<<"$routes"
+  tmp=$(mktemp)
+  {
+    echo "# Managed by vpsctl - Docker app '$name'. Regenerated on deploy and sync."
+    echo "# domains:$all"
+    while read -r upstream domains; do
+      echo "${domains//,/, } {"
+      auth_block "$auth"
+      printf '\treverse_proxy %s\n' "$upstream"
+      echo "}"
+    done <<<"$routes"
+  } >"$tmp"
+  install_snippet "$SITES_DIR/docker-$name.caddy" "$tmp"
+}
+
+# Generates a compose override that attaches routed services to the proxy network, so app
+# compose files don't need any network boilerplate. JSON is valid YAML.
+write_override() { # NAME CONFIG_JSON
+  local out=$OVERRIDES_DIR/$1.yaml json
+  json=$(jq --arg net "$PROXY_NETWORK" '
+    [ .services | to_entries[]
+      | select((.value.labels["vps.domains"] // "") != "" and .value.network_mode == null) | .key ] as $svcs
+    | if ($svcs | length) == 0 then empty else
+        { services: ($svcs | map({key: ., value: {networks: {default: {}, ($net): {}}}}) | from_entries),
+          networks: {($net): {name: $net, external: true}} }
+      end' <<<"$2")
+  if [[ -n $json ]]; then
+    printf '# Generated by vpsctl - do not edit.\n%s\n' "$json" >"$out"
+  else
+    rm -f "$out"
+  fi
+}
+
+warn_bind_mounts() { # CONFIG_JSON DIR NAME
+  local src
+  jq -r --arg dir "$2/" '
+    .services[] | .volumes[]?
+    | select(.type == "bind" and (.source + "/" | startswith($dir)) and (.read_only != true))
+    | .source' <<<"$1" | sort -u | while read -r src; do
+    warn "Writable bind mount '.${src#"$2"}' is inside the app folder, which is replaced on every deploy." \
+      "Store data in $DATA_DIR/$3/ or a named volume instead."
+  done
+}
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+cmd_deploy_static() {
+  local host=${1:-} staging owner
+  [[ -n $host ]] || die "Usage: vpsctl deploy static <hostname> [auth options] < site.tar.gz"
+  shift
+  host=${host,,}
+  [[ $host =~ $HOST_RE ]] || die "Invalid hostname '$host'."
+  parse_deploy_opts "$@"
+  lock
+
+  owner=$(domain_owner "$host")
+  if [[ -n $owner && $owner != "static site $host" ]]; then die "$host is already served by $owner."; fi
+
+  staging=$(mktemp -d "$STATIC_DIR/.staging-XXXXXX")
+  CLEANUP+=("$staging")
+  chmod 755 "$staging"
+  extract_upload "$staging"
+  [[ -f $staging/index.html ]] || warn "No index.html at the top level of the upload."
+
+  replace_dir "$staging" "$STATIC_DIR/$host"
+  apply_auth "static-$host"
+  sync_static_route "$host"
+
+  info "Deployed static site: https://$host"
+  if [[ ! -f $AUTH_DIR/static-$host ]]; then
+    info "(On the first visit, the certificate is issued - that request can take a few seconds.)"
+  fi
+}
+
+cmd_deploy_docker() {
+  local name=${1:-} staging config routes upstream domains
+  [[ -n $name ]] || die "Usage: vpsctl deploy docker <name> [auth options] < project.tar.gz"
+  shift
+  validate_name "$name"
+  parse_deploy_opts "$@"
+  lock
+
+  staging=$(mktemp -d "$DOCKER_DIR/.staging-XXXXXX")
+  CLEANUP+=("$staging")
+  chmod 755 "$staging"
+  extract_upload "$staging"
+
+  # Validate everything before touching the running app.
+  config=$(compose_config "$name" "$staging") || die "The compose file is invalid (see above)."
+  routes=$(routes_from_config "$name" "$config")
+  check_domains "$name" "$routes"
+  warn_bind_mounts "$config" "$staging" "$name"
+
+  replace_dir "$staging" "$DOCKER_DIR/$name"
+  write_override "$name" "$config"
+
+  info "Starting $name (building images if needed)..."
+  dc "$name" up -d --build --remove-orphans \
+    || die "docker compose up failed. Fix the problem and deploy again (logs: vpsctl logs $name)."
+
+  apply_auth "docker-$name"
+  sync_docker_route "$name" "$routes"
+
+  if [[ -z $routes ]]; then
+    info "Deployed $name. No service has a vps.domains label, so it is not reachable from outside."
+  else
+    info "Deployed $name:"
+    while read -r upstream domains; do
+      for d in ${domains//,/ }; do info "  https://$d  ->  $upstream"; done
+    done <<<"$routes"
+  fi
+}
+
+app_status() { # NAME
+  local states total running
+  states=$(docker ps -a --filter "label=com.docker.compose.project=$1" --format '{{.State}}')
+  total=$(grep -c . <<<"$states" || true)
+  running=$(grep -c '^running$' <<<"$states" || true)
+  if (( total == 0 )); then
+    echo "not started"
+  elif (( running == total )); then
+    echo "running $running/$total"
+  else
+    echo "DEGRADED $running/$total"
+  fi
+}
+
+cmd_ls() {
+  local d host name domains
+  {
+    printf 'TYPE\tNAME\tDOMAINS\tSTATUS\tPASSWORD\n'
+    for d in "$STATIC_DIR"/*/; do
+      [[ -d $d ]] || continue
+      host=$(basename "$d")
+      printf 'static\t%s\t%s\t%s\t%s\n' "$host" "$host" "-" "$(has_auth "static-$host")"
+    done
+    for d in "$DOCKER_DIR"/*/; do
+      [[ -d $d ]] || continue
+      name=$(basename "$d")
+      domains=$(snippet_domains "$SITES_DIR/docker-$name.caddy")
+      domains=${domains// /,}
+      printf 'docker\t%s\t%s\t%s\t%s\n' "$name" "${domains:--}" "$(app_status "$name")" "$(has_auth "docker-$name")"
+    done
+  } | column -t -s $'\t'
+
+  if [[ $(docker inspect -f '{{.State.Running}}' "$CADDY_CONTAINER" 2>/dev/null) != true ]]; then
+    warn "The caddy container is not running - nothing is reachable. Check: vpsctl logs caddy"
+  fi
+}
+
+cmd_logs() {
+  require_app "${1:-}"
+  local name=$1
+  shift
+  dc "$name" logs --tail 200 "$@"
+}
+
+cmd_restart() {
+  require_app "${1:-}"
+  dc "$1" restart
+}
+
+update_app() { # NAME AUTO
+  local name=$1 auto=$2 config services
+  info "==> $name"
+  if ! $auto; then
+    dc "$name" pull --ignore-buildable || return 1
+    dc "$name" build --pull || return 1
+    dc "$name" up -d --remove-orphans || return 1
+    return 0
+  fi
+  config=$(dc "$name" config --format json) || return 1
+  mapfile -t services < <(jq -r '
+    .services | to_entries[]
+    | select(.value.build == null and ((.value.labels["vps.auto-update"] // "true") | ascii_downcase) != "false")
+    | .key' <<<"$config")
+  if (( ${#services[@]} == 0 )); then
+    info "nothing to auto-update"
+    return 0
+  fi
+  dc "$name" pull --quiet "${services[@]}" || return 1
+  dc "$name" up -d --no-build "${services[@]}" || return 1
+}
+
+cmd_update() {
+  local all=false auto=false name="" apps=() failed=() d app
+  while (( $# )); do
+    case $1 in
+      --all) all=true ;;
+      --auto) auto=true ;;
+      -*) die "Unknown option '$1'." ;;
+      *) name=$1 ;;
+    esac
+    shift
+  done
+  if $all; then
+    [[ -z $name ]] || die "Use either an app name or --all."
+    apps=(caddy)
+    for d in "$DOCKER_DIR"/*/; do
+      if [[ -d $d ]]; then apps+=("$(basename "$d")"); fi
+    done
+  else
+    require_app "$name"
+    apps=("$name")
+  fi
+
+  lock
+  for app in "${apps[@]}"; do
+    if ! update_app "$app" "$auto"; then
+      warn "Update of '$app' failed."
+      failed+=("$app")
+    fi
+  done
+
+  info "==> Cleaning up unused images and build cache"
+  if $all; then
+    # Images no container uses anymore, plus build cache older than a week.
+    docker image prune -af --filter "until=168h" >/dev/null || warn "Image prune failed."
+    docker builder prune -af --filter "until=168h" >/dev/null || warn "Build cache prune failed."
+  else
+    docker image prune -f >/dev/null || warn "Image prune failed."
+  fi
+
+  (( ${#failed[@]} == 0 )) || die "Update failed for: ${failed[*]}"
+  info "Done."
+}
+
+cmd_rm() {
+  local name=${1:-} volumes=false
+  [[ -n $name ]] || die "Usage: vpsctl rm <name|hostname> [--volumes]"
+  shift
+  while (( $# )); do
+    case $1 in
+      --volumes) volumes=true ;;
+      *) die "Unknown option '$1'." ;;
+    esac
+    shift
+  done
+
+  if [[ $name == *.* ]]; then
+    local host=${name,,}
+    [[ $host =~ $HOST_RE && -d $STATIC_DIR/$host ]] || die "No static site '$host'."
+    lock
+    force_rm "$STATIC_DIR/$host"
+    rm -f "$AUTH_DIR/static-$host"
+    sync_static_route "$host"
+    info "Removed static site $host."
+    return 0
+  fi
+
+  validate_name "$name"
+  [[ -d $DOCKER_DIR/$name ]] || die "No Docker app named '$name'."
+  lock
+  local down=(down --remove-orphans --rmi local)
+  if $volumes; then down+=(--volumes); fi
+  dc "$name" "${down[@]}" || warn "docker compose down failed, removing the files anyway."
+  force_rm "$DOCKER_DIR/$name"
+  rm -f "$OVERRIDES_DIR/$name.yaml" "$AUTH_DIR/docker-$name"
+  install_snippet "$SITES_DIR/docker-$name.caddy"
+  info "Removed Docker app $name."
+
+  local leftover
+  leftover=$(docker volume ls -q --filter "label=com.docker.compose.project=$name")
+  if [[ -n $leftover ]]; then
+    info "Named volumes were kept. Delete them with: docker volume rm $(echo $leftover)"
+  fi
+  if [[ -d $DATA_DIR/$name ]]; then
+    info "$DATA_DIR/$name was kept. Delete it manually if you no longer need it."
+  fi
+}
+
+cmd_sync() {
+  local d f name host config routes
+  lock
+  for d in "$DOCKER_DIR"/*/; do
+    [[ -d $d ]] || continue
+    name=$(basename "$d")
+    if ! config=$(compose_config "$name" "$DOCKER_DIR/$name"); then
+      warn "Skipping $name: invalid compose file."
+      continue
+    fi
+    if ! routes=$(routes_from_config "$name" "$config"); then
+      warn "Skipping $name: invalid vps.* labels."
+      continue
+    fi
+    write_override "$name" "$config"
+    sync_docker_route "$name" "$routes"
+  done
+
+  for f in "$AUTH_DIR"/static-*; do
+    if [[ -f $f ]]; then sync_static_route "${f##*/static-}"; fi
+  done
+
+  # Drop routes whose app or site no longer exists.
+  for f in "$SITES_DIR"/*.caddy; do
+    [[ -f $f ]] || continue
+    case ${f##*/} in
+      docker-*.caddy)
+        name=${f##*/docker-}
+        name=${name%.caddy}
+        if [[ ! -d $DOCKER_DIR/$name ]]; then install_snippet "$f"; fi
+        ;;
+      static-*.caddy)
+        host=${f##*/static-}
+        host=${host%.caddy}
+        if [[ ! -f $AUTH_DIR/static-$host || ! -d $STATIC_DIR/$host ]]; then install_snippet "$f"; fi
+        ;;
+    esac
+  done
+
+  caddy_reload || die "Caddy failed to load the configuration (see above)."
+  info "Routes are in sync."
+}
+
+main() {
+  local cmd=${1:-help}
+  shift || true
+  case $cmd in
+    help|-h|--help) usage; return 0 ;;
+  esac
+
+  [[ -d $STATE_DIR ]] || die "$STATE_DIR does not exist. Run setup.sh first (steps docker, caddy, vpsctl)."
+  docker info >/dev/null 2>&1 \
+    || die "Cannot access Docker as '$(id -un)'. Is the user in the 'docker' group? (Log in again after setup.)"
+
+  case $cmd in
+    deploy)
+      local type=${1:-}
+      shift || true
+      case $type in
+        static) cmd_deploy_static "$@" ;;
+        docker) cmd_deploy_docker "$@" ;;
+        *) die "Usage: vpsctl deploy static|docker <name> [options]" ;;
+      esac
+      ;;
+    ls|list) cmd_ls ;;
+    logs) cmd_logs "$@" ;;
+    restart) cmd_restart "$@" ;;
+    update) cmd_update "$@" ;;
+    rm|remove) cmd_rm "$@" ;;
+    sync) cmd_sync ;;
+    *) die "Unknown command '$cmd'. Run: vpsctl help" ;;
+  esac
+}
+
+# Files in /srv/vps belong to the admin user; when run as root, switch to that user.
+if [[ $EUID -eq 0 && -d $STATE_DIR ]]; then
+  owner=$(stat -c %U "$STATE_DIR")
+  if [[ $owner != root ]]; then
+    exec runuser -u "$owner" -- "$(readlink -f "$0")" "$@"
+  fi
+fi
+
+main "$@"

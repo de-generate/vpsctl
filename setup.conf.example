@@ -1,0 +1,45 @@
+# Copy to setup.conf and adjust. setup.conf is git-ignored.
+# Every value is optional; the defaults are shown.
+
+# Name of the non-root admin user (gets sudo, used for SSH login).
+VPS_USER="vps"
+
+# Public key to authorize for VPS_USER, e.g. the contents of ~/.ssh/id_ed25519.pub.
+# Keys already in /root/.ssh/authorized_keys (added by your provider) are copied too.
+# At least one key must end up installed, or setup.sh stops before touching SSH.
+SSH_PUBKEY=""
+
+# SSH port. Changing it mostly reduces log noise; it is not real security.
+# Also open the new port in your provider's firewall before running setup.sh.
+SSH_PORT="22"
+
+# Space-separated users allowed to log in over SSH. Defaults to VPS_USER.
+# SSH_ALLOW_USERS="vps"
+
+# Hostname. Leave empty to keep the provider's hostname.
+VPS_HOSTNAME=""
+
+# Timezone, see: timedatectl list-timezones
+VPS_TIMEZONE="Etc/UTC"
+
+# Swap file size (only created when no swap exists). "0" disables it.
+SWAP_SIZE="2G"
+SWAPPINESS="10"
+
+# Reboot automatically when a security update needs it (e.g. a new kernel).
+AUTO_REBOOT="true"
+AUTO_REBOOT_TIME="04:00"
+
+# Let unattended-upgrades also update Docker itself. Containers keep running
+# during the upgrade (Docker is configured with live-restore).
+DOCKER_AUTO_UPGRADE="true"
+
+# Email for Let's Encrypt (expiry warnings, account recovery). Optional.
+ACME_EMAIL=""
+
+# Weekly auto-update of Docker apps: pulls new images for services that use a
+# ready-made image (not ones built from a Dockerfile), restarts them and prunes
+# old images. Opt out per service with the label vps.auto-update: "false".
+# Schedule format: systemd OnCalendar (see: man systemd.time).
+AUTO_UPDATE="true"
+AUTO_UPDATE_SCHEDULE="Sun *-*-* 03:00"
