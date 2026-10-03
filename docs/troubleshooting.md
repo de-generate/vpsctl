@@ -17,10 +17,16 @@ On your machine, `ssh -v vps@<server-ip>` shows which keys are offered and why t
 **If no session is open anymore**, use your provider's **web/VNC console**. It logs in on the local terminal, so the SSH rules don't apply. Log in as root (or reset the root password from the provider panel), then:
 
 ```bash
-rm /etc/ssh/sshd_config.d/00-vps-setup.conf && systemctl restart ssh   # back to the default SSH config
+rm /etc/ssh/sshd_config.d/00-vps-setup.conf      # back to the default SSH config (port 22, ...)
+systemctl daemon-reload                         # Ubuntu 22.10+: sshd's listening port comes from
+systemctl restart ssh.socket ssh.service        # ssh.socket, which must be regenerated
+ufw status                                      # is the SSH port allowed? if not:
+ufw allow 22/tcp                                # (or, as a last resort: ufw disable)
 ```
 
-Fix the cause, then run `bash setup.sh ssh` again.
+Also check the **provider firewall**: if you changed `SSH_PORT`, the new port has to be open there too.
+
+Fix the cause, then run `bash setup.sh firewall ssh` again. (The `ssh` step refuses to run if UFW doesn't allow `SSH_PORT`, or if no user in `SSH_ALLOW_USERS` has a valid key.)
 
 The root password is not locked by the script for exactly this reason: the console fallback needs it.
 
@@ -33,7 +39,9 @@ sudo fail2ban-client status sshd             # list banned IPs
 sudo fail2ban-client set sshd unbanip <your-ip>
 ```
 
-To never ban a static home IP, add `ignoreip = 127.0.0.1/8 ::1 <your-ip>` to the `[DEFAULT]` section of `/etc/fail2ban/jail.local` (or, so that re-runs keep it, in `lib/fail2ban.sh`).
+To never ban a static home IP, set `FAIL2BAN_IGNOREIP="<your-ip>"` in `setup.conf` and run `sudo bash setup.sh fail2ban`.
+
+If you're banned right after setup without any typos, your SSH agent may be offering too many keys: see `IdentitiesOnly` in [01-initial-setup.md](01-initial-setup.md#6-client-convenience).
 
 ## Line endings: `$'\r': command not found`
 
@@ -57,6 +65,7 @@ To prevent it, keep `.gitattributes` and set your editor to LF for this repo.
 **502 Bad Gateway (Docker app).** Caddy can't reach the container:
 - `vps <target> ls`: is the app running? `vps <target> logs <name>` shows why not.
 - `vps.http-port` must be the port the app listens on *inside* the container, and the app must listen on `0.0.0.0`, not `127.0.0.1`.
+- Caddy must be connected to the app's network: `docker inspect -f '{{json .NetworkSettings.Networks}}' caddy` should list `vps-<name>`. If not (e.g. after recreating the Caddy container by hand), run `vps <target> sync`.
 
 **Routes are missing or stale**, e.g. after running `docker compose` by hand or restoring files: `vps <target> sync` regenerates all routes and compose overrides from what's in `/srv/docker` and `/srv/static`.
 

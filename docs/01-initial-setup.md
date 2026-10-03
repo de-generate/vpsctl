@@ -92,7 +92,10 @@ Host vps
     User vps
     Port 22
     IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
 ```
+
+`IdentitiesOnly yes` makes ssh offer only that key. The server allows 3 attempts per connection (and fail2ban counts failures), so an SSH agent holding many keys could otherwise be refused before it gets to the right one.
 
 Now `ssh vps` is enough. The same name works for the deploy client: `vps vps ls` (see [02-deploying-apps.md](02-deploying-apps.md)).
 
@@ -100,19 +103,21 @@ Now `ssh vps` is enough. The same name works for the deploy client: `vps vps ls`
 
 | File | Step |
 |------|------|
-| `/etc/hostname`, `/etc/hosts`, `/etc/cloud/cloud.cfg.d/99-vps-setup-hostname.cfg` | system |
+| `/etc/hostname`, the `127.0.1.1` line in `/etc/hosts`, `/etc/cloud/cloud.cfg.d/99-vps-setup-hostname.cfg` (only with `VPS_HOSTNAME`) | system |
 | `/swapfile`, `/etc/fstab` | system |
 | `/etc/sysctl.d/99-vps-setup.conf` | system |
-| `/home/vps/.ssh/authorized_keys` | user |
+| User `vps` (member of `sudo`), `/home/vps/.ssh/authorized_keys` | user |
 | `/etc/apt/apt.conf.d/20auto-upgrades`, `52unattended-upgrades-vps-setup` | upgrades |
-| UFW rules (`ufw status verbose`) | firewall |
+| UFW rules (`ufw status verbose`), `IPV6=yes` in `/etc/default/ufw` | firewall |
 | `/etc/fail2ban/jail.local` | fail2ban |
-| `/etc/apt/sources.list.d/docker.sources`, `/etc/docker/daemon.json`, `52unattended-upgrades-docker` | docker |
+| `/etc/apt/keyrings/docker.asc`, `/etc/apt/sources.list.d/docker.sources`, `/etc/docker/daemon.json`, `/etc/apt/apt.conf.d/52unattended-upgrades-docker`, `vps` added to the `docker` group, Docker network `caddy` | docker |
 | `/srv/static`, `/srv/docker`, `/srv/data`, `/srv/vps` (incl. `/srv/vps/caddy/` with the Caddy container) | caddy |
-| `/usr/local/bin/vpsctl`, `vps-auto-update.service` / `.timer` | vpsctl |
+| `/usr/local/bin/vpsctl`, `/etc/systemd/system/vps-auto-update.service` and `.timer` | vpsctl |
 | `/etc/ssh/sshd_config.d/00-vps-setup.conf` | ssh |
 
 Files that start with `# Managed by vps-setup` are rewritten on every run. Put your own changes in separate files, or change the script.
+
+At runtime, `vpsctl` also creates one Docker network per routed app (`vps-<name>`) and generates the files under `/srv/vps/` (see [02-deploying-apps.md](02-deploying-apps.md)).
 
 ## Re-running
 
@@ -123,3 +128,23 @@ sudo bash setup.sh ssh firewall fail2ban   # e.g. after changing SSH_PORT
 ```
 
 After the first run root can no longer log in over SSH, so later runs use `sudo` as `vps`.
+
+### Updating the server to a newer version of this repo
+
+Root can't log in anymore after the first run, so move the repo (including your `setup.conf`) to the `vps` user once:
+
+```bash
+sudo mv /root/vps-setup ~ && sudo chown -R vps: ~/vps-setup
+```
+
+From then on, copy the new version over it (or `git pull` if it's a clone) and re-run the setup. All steps are idempotent, so running everything is safe:
+
+```bash
+# on your machine - setup.conf stays as it is on the server
+scp -r vps-setup/setup.sh vps-setup/lib vps-setup/bin vps:~/vps-setup/
+
+# on the server
+cd ~/vps-setup && sudo bash setup.sh
+```
+
+`bin/vpsctl` is installed as a copy in `/usr/local/bin`, so changes to it only take effect through the `vpsctl` step.

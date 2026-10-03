@@ -17,7 +17,12 @@ Scripts and docs for setting up and running a general-purpose Ubuntu Server VPS 
 | `vpsctl`   | App management CLI on the server, weekly auto-update of app images |
 | `ssh`      | Key-only login, no root login, unused features disabled |
 
-Supported: Ubuntu Server 24.04 LTS and newer.
+## Requirements
+
+- **Server:** Ubuntu Server 24.04 LTS or newer (LTS recommended: Docker's repo supports new releases only after a few weeks), x86_64 or arm64, a fresh install with root SSH access.
+- **Resources:** works on 1 vCPU / 1 GB RAM for static sites; **2 GB RAM** recommended once Docker apps are built on the server. Docker images grow quickly, so plan for 20 GB disk or more.
+- **DNS:** a domain whose records (ideally a wildcard `*.example.com`) point at the server.
+- **Your machine:** `ssh` and `tar`, plus bash for the deploy client (Git Bash or WSL on Windows, macOS, Linux).
 
 ## Quick start
 
@@ -60,12 +65,13 @@ lib/<step>.sh         one file per step, each defines step_<name>()
 bin/vps               client: deploy/manage apps over SSH (runs on your machine)
 bin/vpsctl            server-side CLI, installed to /usr/local/bin by the vpsctl step
 examples/             a static site, a ready-made image and a custom-built app
-docs/                 setup guide, deploying apps, troubleshooting, future improvements
+docs/                 setup guide, deploying apps, security model, troubleshooting, future improvements
 ```
 
 ## Docs
 
 - [Initial setup](docs/01-initial-setup.md)
 - [Deploying apps](docs/02-deploying-apps.md)
+- [Security model](docs/security.md): what protects what, and what doesn't
 - [Troubleshooting](docs/troubleshooting.md): lockouts, fail2ban, line endings, disk space
 - [Future improvements](docs/future-improvements.md): deploy ideas, backups, monitoring, protecting dashboards

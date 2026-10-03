@@ -21,7 +21,8 @@ Ideas that were deliberately left out of the first version:
 - **Changing a password without redeploying**: e.g. `vps <target> password <name>`. Today it's set with `deploy … --password`.
 - **Per-site static options**: SPA fallback on/off, custom 404 page, caching headers, redirects (e.g. `www.` → bare domain). Could be a small `.vps.json` in the uploaded folder.
 - **Default target**: a `VPS_TARGET` environment variable so the SSH target can be omitted.
-- **Update notifications**: report failed weekly auto-updates (e.g. to a self-hosted ntfy) instead of only the journal.
+- **Less privilege for vpsctl**: the `vps` user is in the `docker` group, which is root-equivalent (see [security.md](security.md)). Alternatives: rootless Docker, or a narrow `sudo` rule that only allows `vpsctl` (needs passwordless sudo for that one command, since deploys run non-interactively).
+- **Update notifications**: report failed weekly auto-updates (e.g. to a self-hosted ntfy) instead of only `vps <target> ls` and the journal.
 - **Access logs** for static sites and apps (Caddy `log` directive, with rotation).
 - **App catalog**: pre-configured compose files for common self-hosted tools (Uptime Kuma, IT-Tools, …), possibly in a separate repo.
 - **Web UI**: something like Dockge pointed at `/srv/docker`, reachable only through an SSH tunnel.

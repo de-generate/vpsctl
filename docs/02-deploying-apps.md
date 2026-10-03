@@ -29,7 +29,7 @@ vps (bin/vps)  ── tar over SSH ──▶   vpsctl  ──▶ /srv/static/<ho
 
 ## Setting up the client
 
-The `vps` client is a bash script that needs only `ssh` and `tar`. It works in Git Bash or WSL on Windows, and on macOS and Linux.
+The `vps` client is a bash script that needs only `ssh` and `tar`. It works in Git Bash or WSL on Windows, and on macOS and Linux. It's kept compatible with bash 3.2 (macOS's default) and with both GNU tar and bsdtar.
 
 Put this repo's `bin/` folder on your PATH, e.g. in `~/.bashrc`:
 
@@ -44,6 +44,7 @@ The first argument of every command is an **SSH target**, which is passed straig
 Host my-vps
     HostName 203.0.113.10
     User vps
+    IdentitiesOnly yes
 ```
 
 ```bash
@@ -67,6 +68,7 @@ vps my-vps deploy static todo.example.com ./dist
 - Redeploying replaces the whole folder, so files deleted locally disappear from the server too.
 - **Single-page apps:** a path without a file extension that doesn't exist (e.g. `/settings/profile`) is answered with `/index.html`, so client-side routing works. Missing files with an extension (`/app.js`) still return 404.
 - Dotfiles (`.env`, `.git/…`) are never served.
+- Symlinks must stay inside the site folder and be relative. Others are rejected, because Caddy follows them and could otherwise serve files from outside the site.
 - The first visit takes a few seconds while the certificate is issued.
 
 ### Ready-made image (compose file only)
@@ -140,7 +142,15 @@ Working examples are in [`examples/`](../examples): `static-site`, `docker-image
 | `vps.http-port` | Port the service serves HTTP on *inside* the container (not a published host port). Default `80`. Quote it in YAML (`"8080"`). |
 | `vps.auto-update` | `"false"` excludes the service from the weekly automatic update. |
 
-A hostname can only belong to one app or static site; deploys that would take over someone else's hostname are refused.
+A hostname can only belong to one app or static site; deploys that would take over someone else's hostname are refused. A service with `vps.domains` can't use `network_mode` (Caddy couldn't reach it).
+
+## Compose file checklist
+
+- **`restart: unless-stopped` on every service.** Without it, the service stays down after a reboot, and with `AUTO_REBOOT=true` the server reboots on its own after kernel updates. `vpsctl` warns about services without a restart policy.
+- **`mem_limit`** on every service (see [Resource limits](#resource-limits)).
+- **No `ports:`** for web apps; routing goes through `vps.domains`.
+- **Persistent data** in named volumes or `/srv/data/<name>/` (see [Data](#data)).
+- **Pinned tags** for anything stateful, especially databases (see [Updates](#updates)).
 
 ## Password protection
 
@@ -163,6 +173,7 @@ vps my-vps ls
 # static  todo.example.com   todo.example.com    -                  -            -
 # docker  my-api             api.example.com     -                  running 2/2  yes
 # docker  mumble             -                   1234/tcp,1234/udp  running 1/1  -
+# Auto-update: last run Sun 2026-10-04 03:07:12 UTC (ok).
 
 vps my-vps logs my-api            # last 200 lines
 vps my-vps logs my-api -f         # follow (Ctrl+C to stop)
@@ -184,7 +195,7 @@ When logged in to the server, the same commands are available as `vpsctl …` (e
 - **Manual:** `vps <target> update <name>` pulls images *and* rebuilds custom services with fresh base images.
 - **Opting out:** `vps.auto-update: "false"` on a service. Change the schedule with `AUTO_UPDATE_SCHEDULE`, or disable it with `AUTO_UPDATE=false` in `setup.conf`.
 
-Auto-updates follow the image **tag**. `:latest` gets every new version, including breaking ones. Pin what must stay stable, **especially databases**: `postgres:latest` jumping a major version can't read its old data files, while `postgres:17` only gets patch releases. Check the timer's last run with `journalctl -u vps-auto-update`.
+Auto-updates follow the image **tag**. `:latest` gets every new version, including breaking ones. Pin what must stay stable, **especially databases**: `postgres:latest` jumping a major version can't read its old data files, while `postgres:17` only gets patch releases. `vps <target> ls` shows the result of the last run (and a warning if it failed); details are in `journalctl -u vps-auto-update`.
 
 ## Data
 
@@ -199,7 +210,7 @@ Both locations are what a backup needs to cover later.
 
 - The whole folder, except `.git`, and also `node_modules` for docker deploys.
 - Extra patterns can go in a `.vpsignore` file in the folder (tar exclude patterns, one per line, e.g. `*.log`, `tmp`).
-- `.env` files **are** uploaded on purpose: that's how secrets reach the server without being in git.
+- `.env` files **are** uploaded on purpose: that's how secrets reach the server without being in git. On the server they're made readable only by the `vps` user.
 
 ## Non-HTTP services (game servers, voice chat, …)
 
