@@ -1,0 +1,3 @@
+# lib/*.sh are sourced into setup.sh and have no shebang.
+shell=bash
+external-sources=true

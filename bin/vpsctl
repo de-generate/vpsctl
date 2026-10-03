@@ -155,8 +155,9 @@ auth_block() { # AUTH_FILE
   fi
 }
 
-has_auth() {
-  if [[ -f $AUTH_DIR/$1 ]]; then echo yes; else echo -; fi
+# "yes" only if the active route has basic auth - not just a stored hash.
+has_auth() { # KEY (static-<host> | docker-<name>)
+  if grep -qs basic_auth "$SITES_DIR/$1.caddy"; then echo yes; else echo -; fi
 }
 
 snippet_domains() { # SNIPPET_FILE - prints the domains listed in its "# domains:" line
@@ -209,6 +210,7 @@ apply_auth() { # KEY
   elif $PASSWORD_STDIN; then
     hash=$(printf '%s\n' "$PASSWORD" | docker exec -i "$CADDY_CONTAINER" caddy hash-password 2>/dev/null) \
       || die "Hashing the password failed. Is the caddy container running?"
+    # shellcheck disable=SC2016 # literal bcrypt prefix
     [[ $hash == '$2'* ]] || die "Unexpected output from 'caddy hash-password'."
     (umask 077 && printf '%s %s\n' "$AUTH_USER" "$hash" >"$AUTH_DIR/$1")
   fi
@@ -219,6 +221,23 @@ extract_upload() { # DEST
     || die "Could not unpack the upload."
   chmod -R u+rwX,go+rX,go-w "$1"
   [[ -n $(ls -A "$1") ]] || die "The upload is empty."
+}
+
+# Caddy follows symlinks, so a link out of the site folder could expose other sites
+# (bypassing their password) or files inside the Caddy container, such as TLS keys.
+check_symlinks() { # DIR
+  local link target
+  while IFS= read -r -d '' link; do
+    target=$(readlink -- "$link")
+    [[ $target != /* ]] || die "Absolute symlink '${link#"$1"/}' -> '$target' is not allowed in static sites."
+    [[ $(realpath -m -- "$link") == "$1"/* ]] \
+      || die "Symlink '${link#"$1"/}' -> '$target' points outside the site folder."
+  done < <(find "$1" -type l -print0)
+}
+
+# Secrets in .env files should only be readable by the owner (compose runs as this user).
+protect_env_files() { # DIR
+  find "$1" -type f -name '.env*' -exec chmod 600 {} +
 }
 
 # Moves NEW to TARGET, replacing whatever was there.
@@ -236,9 +255,11 @@ replace_dir() { # NEW TARGET
 # routes
 # ---------------------------------------------------------------------------
 
-sync_static_route() { # HOST
+# Installs or removes the protected route of a static site. With --pending, the route is
+# installed even though the folder doesn't exist yet (it serves 404 until it does).
+sync_static_route() { # HOST [--pending]
   local host=$1 auth=$AUTH_DIR/static-$1 tmp
-  if [[ -f $auth && -d $STATIC_DIR/$host ]]; then
+  if [[ -f $auth && ( -d $STATIC_DIR/$host || ${2:-} == --pending ) ]]; then
     tmp=$(mktemp)
     {
       echo "# Managed by vpsctl - password-protected static site. Regenerated on deploy and sync."
@@ -266,6 +287,7 @@ routes_from_config() { # NAME CONFIG_JSON
     | @tsv' <<<"$2")
   while IFS=$'\t' read -r upstream port domains; do
     [[ -n $upstream ]] || continue
+    [[ $upstream =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "Invalid container name '$upstream'."
     [[ $port =~ ^[0-9]+$ ]] || die "Invalid vps.http-port label '$port'."
     for d in ${domains//,/ }; do
       [[ $d =~ $HOST_RE ]] || die "Invalid domain '$d' in vps.domains label."
@@ -357,11 +379,14 @@ cmd_deploy_static() {
   CLEANUP+=("$staging")
   chmod 755 "$staging"
   extract_upload "$staging"
+  check_symlinks "$staging"
   [[ -f $staging/index.html ]] || warn "No index.html at the top level of the upload."
 
-  replace_dir "$staging" "$STATIC_DIR/$host"
+  # The password route must be active before the files appear, otherwise the catch-all
+  # would serve them publicly - for a moment, or for good if a later step fails.
   apply_auth "static-$host"
-  sync_static_route "$host"
+  sync_static_route "$host" --pending
+  replace_dir "$staging" "$STATIC_DIR/$host"
 
   info "Deployed static site: https://$host"
   if [[ ! -f $AUTH_DIR/static-$host ]]; then
@@ -381,6 +406,7 @@ cmd_deploy_docker() {
   CLEANUP+=("$staging")
   chmod 755 "$staging"
   extract_upload "$staging"
+  protect_env_files "$staging"
 
   # Validate everything before touching the running app.
   config=$(compose_config "$name" "$staging") || die "The compose file is invalid (see above)."
@@ -388,6 +414,7 @@ cmd_deploy_docker() {
   check_domains "$name" "$routes"
   warn_bind_mounts "$config" "$staging" "$name"
 
+  apply_auth "docker-$name"
   replace_dir "$staging" "$DOCKER_DIR/$name"
   write_override "$name" "$config"
 
@@ -395,7 +422,6 @@ cmd_deploy_docker() {
   dc "$name" up -d --build --remove-orphans \
     || die "docker compose up failed. Fix the problem and deploy again (logs: vpsctl logs $name)."
 
-  apply_auth "docker-$name"
   sync_docker_route "$name" "$routes"
 
   local ports
@@ -582,7 +608,7 @@ cmd_rm() {
   local leftover
   leftover=$(docker volume ls -q --filter "label=com.docker.compose.project=$name")
   if [[ -n $leftover ]]; then
-    info "Named volumes were kept. Delete them with: docker volume rm $(echo $leftover)"
+    info "Named volumes were kept. Delete them with: docker volume rm ${leftover//$'\n'/ }"
   fi
   if [[ -d $DATA_DIR/$name ]]; then
     info "$DATA_DIR/$name was kept. Delete it manually if you no longer need it."

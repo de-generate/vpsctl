@@ -1,5 +1,8 @@
 # Step: docker - Docker Engine + Compose from Docker's official apt repository.
 
+# https://docs.docker.com/engine/install/ubuntu/ - Docker's release signing key.
+DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+
 step_docker() {
   log "Installing Docker Engine from Docker's apt repository"
 
@@ -11,9 +14,17 @@ step_docker() {
     fi
   done
 
-  install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
+  # Only trust the downloaded key if it is Docker's known release signing key.
+  local key fingerprint
+  key=$(mktemp)
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$key"
+  fingerprint=$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+  if [[ $fingerprint != "$DOCKER_KEY_FINGERPRINT" ]]; then
+    rm -f "$key"
+    die "Docker's apt key has an unexpected fingerprint ('$fingerprint'). Refusing to trust it."
+  fi
+  install -D -m 0644 "$key" /etc/apt/keyrings/docker.asc
+  rm -f "$key"
 
   # shellcheck source=/dev/null
   . /etc/os-release
