@@ -6,7 +6,7 @@ Things that are planned or worth doing later, so they don't get forgotten.
 
 Already handled by convention, but good to remember: **ports published by Docker (`ports:` / `-p 8080:80`) bypass UFW**, because Docker writes its own iptables rules. This applies to **IPv6 as well**: even with Docker's own IPv6 support off, published ports listen on `[::]` and forward IPv6 traffic to the container.
 
-The setup avoids it for web apps: only Caddy publishes ports (80/443, meant to be public), and apps are reached over the `caddy` Docker network. Non-HTTP services publish their port on purpose (see [Non-HTTP services](02-deploying-apps.md#non-http-services-game-servers-voice-chat-)). For ports that should *not* be public:
+The setup avoids it for web apps: only Caddy publishes ports (80/443, meant to be public), and apps are reached over per-app Docker networks. Non-HTTP services publish their port on purpose (see [Non-HTTP services](02-deploying-apps.md#non-http-services-game-servers-voice-chat-)). For ports that should *not* be public:
 
 1. Bind it to localhost: `127.0.0.1:8080:80` (reach it through an SSH tunnel).
 2. Use the provider firewall as an outer layer (only 22/80/443 open).

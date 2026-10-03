@@ -24,7 +24,7 @@ vps (bin/vps)  ── tar over SSH ──▶   vpsctl  ──▶ /srv/static/<ho
 
 - **Caddy** runs as a container on ports 80/443 and gets a Let's Encrypt certificate for every hostname it serves.
 - **Static sites** are served by a catch-all: a request for `foo.example.com` is answered from `/srv/static/foo.example.com/` if that folder exists. The certificate is requested on the first visit, only for hostnames that have a folder.
-- **Docker apps** get a generated route per service with a `vps.domains` label. vpsctl also attaches those services to the shared `caddy` network, so compose files don't need any network or port configuration. **Web apps don't publish ports** (`ports:`). Caddy reaches them over the network, and published ports bypass the firewall. Non-HTTP services are the exception, see [Non-HTTP services](#non-http-services-game-servers-voice-chat-).
+- **Docker apps** get a generated route per service with a `vps.domains` label. vpsctl also attaches those services to a network of their own (`vps-<name>`) that only Caddy joins, so compose files don't need any network or port configuration. Apps can't reach each other over it, and a password set with `--password` can't be bypassed by talking to the container from another app. **Web apps don't publish ports** (`ports:`). Caddy reaches them over the network, and published ports bypass the firewall. Non-HTTP services are the exception, see [Non-HTTP services](#non-http-services-game-servers-voice-chat-).
 - Every deploy **replaces** the app folder completely. Persistent data goes in named volumes or `/srv/data/<name>/` (see [Data](#data)).
 
 ## Setting up the client

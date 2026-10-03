@@ -73,7 +73,7 @@ EOF
   # Lets vpsctl manage containers without sudo. NOTE: docker group membership is root-equivalent.
   usermod -aG docker "$VPS_USER"
 
-  # Shared network between Caddy and every app it routes to.
+  # Caddy's own network. Apps get separate per-app networks from vpsctl ("vps-<app>").
   if ! docker network inspect caddy &>/dev/null; then
     docker network create caddy >/dev/null
     info "created docker network 'caddy'"

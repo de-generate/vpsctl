@@ -21,7 +21,9 @@ AUTH_DIR=$STATE_DIR/auth
 OVERRIDES_DIR=$STATE_DIR/overrides
 CADDY_CONTAINER=caddy
 CADDY_IMAGE=caddy:2
-PROXY_NETWORK=caddy
+# Each app with routes gets its own network ("vps-<app>") that only its routed services
+# and Caddy join. Apps can't reach each other, and their service names can't collide.
+APP_NETWORK_PREFIX=vps-
 
 HOST_RE='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
 # Compose project name rules minus dots, so app names can never be confused with hostnames.
@@ -330,11 +332,11 @@ sync_docker_route() { # NAME ROUTES
   install_snippet "$SITES_DIR/docker-$name.caddy" "$tmp"
 }
 
-# Generates a compose override that attaches routed services to the proxy network, so app
-# compose files don't need any network boilerplate. JSON is valid YAML.
+# Generates a compose override that attaches routed services to the app's proxy network,
+# so app compose files don't need any network boilerplate. JSON is valid YAML.
 write_override() { # NAME CONFIG_JSON
   local out=$OVERRIDES_DIR/$1.yaml json
-  json=$(jq --arg net "$PROXY_NETWORK" '
+  json=$(jq --arg net "$APP_NETWORK_PREFIX$1" '
     [ .services | to_entries[]
       | select((.value.labels["vps.domains"] // "") != "" and .value.network_mode == null) | .key ] as $svcs
     | if ($svcs | length) == 0 then empty else
@@ -346,6 +348,39 @@ write_override() { # NAME CONFIG_JSON
   else
     rm -f "$out"
   fi
+}
+
+caddy_on_network() { # NETWORK
+  docker inspect -f '{{json .NetworkSettings.Networks}}' "$CADDY_CONTAINER" 2>/dev/null \
+    | jq -e --arg n "$1" 'has($n)' >/dev/null
+}
+
+# Creates the app's proxy network if needed and connects Caddy to it.
+connect_app_network() { # NAME
+  local net=$APP_NETWORK_PREFIX$1
+  if ! docker network inspect "$net" >/dev/null 2>&1; then
+    docker network create --label "vps.app=$1" "$net" >/dev/null
+  fi
+  if ! caddy_on_network "$net"; then
+    docker network connect "$net" "$CADDY_CONTAINER"
+  fi
+}
+
+# Disconnects Caddy from the app's proxy network and removes it (no-op if absent).
+remove_app_network() { # NAME
+  local net=$APP_NETWORK_PREFIX$1
+  docker network inspect "$net" >/dev/null 2>&1 || return 0
+  if caddy_on_network "$net"; then docker network disconnect "$net" "$CADDY_CONTAINER"; fi
+  docker network rm "$net" >/dev/null || warn "Could not remove network $net (still in use?)."
+}
+
+# A recreated Caddy container (new image, changed compose file) loses the networks it was
+# connected to at runtime. Reconnects it to every app network.
+reconnect_app_networks() {
+  local net
+  for net in $(docker network ls --filter label=vps.app --format '{{.Name}}'); do
+    if ! caddy_on_network "$net"; then docker network connect "$net" "$CADDY_CONTAINER"; fi
+  done
 }
 
 warn_bind_mounts() { # CONFIG_JSON DIR NAME
@@ -417,11 +452,13 @@ cmd_deploy_docker() {
   apply_auth "docker-$name"
   replace_dir "$staging" "$DOCKER_DIR/$name"
   write_override "$name" "$config"
+  if [[ -n $routes ]]; then connect_app_network "$name"; fi
 
   info "Starting $name (building images if needed)..."
   dc "$name" up -d --build --remove-orphans \
     || die "docker compose up failed. Fix the problem and deploy again (logs: vpsctl logs $name)."
 
+  if [[ -z $routes ]]; then remove_app_network "$name"; fi
   sync_docker_route "$name" "$routes"
 
   local ports
@@ -513,6 +550,7 @@ update_app() { # NAME AUTO
     dc "$name" pull --ignore-buildable || return 1
     dc "$name" build --pull || return 1
     dc "$name" up -d --remove-orphans || return 1
+    if [[ $name == caddy ]]; then reconnect_app_networks || return 1; fi
     return 0
   fi
   config=$(dc "$name" config --format json) || return 1
@@ -526,6 +564,7 @@ update_app() { # NAME AUTO
   fi
   dc "$name" pull --quiet "${services[@]}" || return 1
   dc "$name" up -d --no-build "${services[@]}" || return 1
+  if [[ $name == caddy ]]; then reconnect_app_networks || return 1; fi
 }
 
 cmd_update() {
@@ -600,6 +639,7 @@ cmd_rm() {
   local down=(down --remove-orphans --rmi local)
   if $volumes; then down+=(--volumes); fi
   dc "$name" "${down[@]}" || warn "docker compose down failed, removing the files anyway."
+  remove_app_network "$name"
   force_rm "$DOCKER_DIR/$name"
   rm -f "$OVERRIDES_DIR/$name.yaml" "$AUTH_DIR/docker-$name"
   install_snippet "$SITES_DIR/docker-$name.caddy"
@@ -616,7 +656,7 @@ cmd_rm() {
 }
 
 cmd_sync() {
-  local d f name host config routes
+  local d f name host config routes net
   lock
   for d in "$DOCKER_DIR"/*/; do
     [[ -d $d ]] || continue
@@ -630,8 +670,16 @@ cmd_sync() {
       continue
     fi
     write_override "$name" "$config"
+    if [[ -n $routes ]]; then connect_app_network "$name"; fi
     sync_docker_route "$name" "$routes"
   done
+
+  # Networks of removed apps; then make sure Caddy is on all remaining ones.
+  for net in $(docker network ls --filter label=vps.app --format '{{.Name}}'); do
+    name=${net#"$APP_NETWORK_PREFIX"}
+    if [[ ! -d $DOCKER_DIR/$name ]]; then remove_app_network "$name"; fi
+  done
+  reconnect_app_networks
 
   for f in "$AUTH_DIR"/static-*; do
     if [[ -f $f ]]; then sync_static_route "${f##*/static-}"; fi

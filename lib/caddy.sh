@@ -55,15 +55,17 @@ EOF
 
   # A running container doesn't notice a changed Caddyfile on its own.
   if $caddyfile_changed; then
-    local i
-    for i in {1..10}; do
-      if docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile &>/dev/null; then
-        info "Caddy config reloaded"
-        return 0
-      fi
+    local attempt=0
+    until docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile &>/dev/null; do
+      (( ++attempt < 10 )) || die "Caddy did not accept the new Caddyfile. Check: docker logs caddy"
       sleep 1
     done
-    die "Caddy did not accept the new Caddyfile. Check: docker logs caddy"
+    info "Caddy config reloaded"
+  fi
+
+  # If the container was recreated, it lost its connections to the per-app networks.
+  if [[ -x /usr/local/bin/vpsctl ]]; then
+    runuser -u "$VPS_USER" -- /usr/local/bin/vpsctl sync
   fi
 }
 
