@@ -1,0 +1,4 @@
+# Served as /robots.txt on every site (installed by the caddy step of setup.sh).
+# Static sites can ship their own robots.txt, which then takes precedence.
+User-agent: *
+Allow: /

@@ -152,11 +152,12 @@ install_snippet() {
   rm -f "$backup"
 }
 
+# Prints a basic_auth block (if AUTH_FILE exists), indented for use inside a "handle".
 auth_block() { # AUTH_FILE
   local user hash
   if [[ -f $1 ]]; then
     read -r user hash <"$1"
-    printf '\tbasic_auth {\n\t\t%s %s\n\t}\n' "$user" "$hash"
+    printf '\t\tbasic_auth {\n\t\t\t%s %s\n\t\t}\n' "$user" "$hash"
   fi
 }
 
@@ -269,9 +270,12 @@ sync_static_route() { # HOST [--pending]
     {
       echo "# Managed by vpsctl - password-protected static site. Regenerated on deploy and sync."
       echo "# domains: $host"
+      # robots.txt (the site's own or the global one) is served without the password.
       echo "$host {"
+      printf '\thandle /robots.txt {\n\t\timport static_files %s/%s\n\t}\n' "$STATIC_DIR" "$host"
+      printf '\thandle {\n'
       auth_block "$auth"
-      printf '\timport static_files %s/%s\n' "$STATIC_DIR" "$host"
+      printf '\t\timport static_files %s/%s\n\t}\n' "$STATIC_DIR" "$host"
       echo "}"
     } >"$tmp"
     install_snippet "$SITES_DIR/static-$host.caddy" "$tmp"
@@ -330,9 +334,11 @@ sync_docker_route() { # NAME ROUTES
     echo "# Managed by vpsctl - Docker app '$name'. Regenerated on deploy and sync."
     echo "# domains:$all"
     while read -r upstream domains; do
+      # The global robots.txt wins over the app's and needs no password.
       echo "${domains//,/, } {"
+      printf '\timport global_robots\n\thandle {\n'
       auth_block "$auth"
-      printf '\treverse_proxy %s\n' "$upstream"
+      printf '\t\treverse_proxy %s\n\t}\n' "$upstream"
       echo "}"
     done <<<"$routes"
   } >"$tmp"

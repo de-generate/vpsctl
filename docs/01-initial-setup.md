@@ -113,7 +113,7 @@ Now `ssh vps` is enough. The same name works for the deploy client: `vps vps ls`
 | UFW rules (`ufw status verbose`), `IPV6=yes` in `/etc/default/ufw` | firewall |
 | `/etc/fail2ban/jail.local` | fail2ban |
 | `/etc/apt/keyrings/docker.asc`, `/etc/apt/sources.list.d/docker.sources`, `/etc/docker/daemon.json`, `/etc/apt/apt.conf.d/52unattended-upgrades-docker`, `vps` added to the `docker` group, Docker network `caddy` | docker |
-| `/srv/static`, `/srv/docker`, `/srv/data`, `/srv/vps` (incl. `/srv/vps/caddy/` with the Caddy container) | caddy |
+| `/srv/static`, `/srv/docker`, `/srv/data`, `/srv/vps` (incl. `/srv/vps/caddy/` with the Caddy container and the global `robots.txt` from `config/`) | caddy |
 | `/usr/local/bin/vpsctl`, `/etc/systemd/system/vps-auto-update.service` and `.timer` | vpsctl |
 | `/etc/ssh/sshd_config.d/00-vps-setup.conf` | ssh |
 

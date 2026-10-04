@@ -64,6 +64,7 @@ lib/common.sh         shared helpers (logging, write_file, apt_install)
 lib/<step>.sh         one file per step, each defines step_<name>()
 bin/vps               client: deploy/manage apps over SSH (runs on your machine)
 bin/vpsctl            server-side CLI, installed to /usr/local/bin by the vpsctl step
+config/robots.txt     robots.txt served on every site (static sites can override it)
 examples/             a static site, a ready-made image and a custom-built app
 docs/                 setup guide, deploying apps, security model, troubleshooting, future improvements
 ```

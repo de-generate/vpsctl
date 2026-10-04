@@ -27,7 +27,7 @@ Ideas that were deliberately left out of the first version:
 - **App catalog**: pre-configured compose files for common self-hosted tools (Uptime Kuma, IT-Tools, …), possibly in a separate repo.
 - **Web UI**: something like Dockge pointed at `/srv/docker`, reachable only through an SSH tunnel.
 - **Git-based deploys**: `git push` to the server triggering a deploy. Only worth it if uploading folders starts to feel limiting.
-- **Wildcard certificates**: would hide subdomain names from public Certificate Transparency logs. Needs a DNS API (Namecheap's has account requirements and IP whitelisting) and a custom Caddy build with the DNS plugin.
+- **Wildcard certificates**: would hide subdomain names from public Certificate Transparency logs, and let unknown subdomains show a proper 404 page instead of a TLS error (one level only: not `a.b.example.com`). Issuing on-demand certificates for *any* subdomain instead was rejected: random subdomain requests could use up the Let's Encrypt rate limit (about 50 certificates per domain per week). Needs a DNS API (Namecheap's has account requirements and IP whitelisting) and a custom Caddy build with the DNS plugin.
 
 ## Backups
 

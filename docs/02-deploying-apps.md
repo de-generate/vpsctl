@@ -152,6 +152,23 @@ A hostname can only belong to one app or static site; deploys that would take ov
 - **Persistent data** in named volumes or `/srv/data/<name>/` (see [Data](#data)).
 - **Pinned tags** for anything stateful, especially databases (see [Updates](#updates)).
 
+## robots.txt
+
+Every site answers `/robots.txt` with a global file, [`config/robots.txt`](../config/robots.txt) in this repo. By default it allows all crawlers, so sites can be indexed by search engines.
+
+- **Static sites** can ship their own `robots.txt`; it takes precedence over the global one.
+- **Docker apps** always get the global file, even if the app serves its own.
+- `robots.txt` is reachable **without** the password on password-protected sites, so crawlers get a clear answer instead of a 401.
+
+To change it, edit `config/robots.txt` and run `sudo bash setup.sh caddy` on the server (no restart needed). E.g. to keep all crawlers out:
+
+```
+User-agent: *
+Disallow: /
+```
+
+Hostnames that don't serve anything can't answer either, because there is no certificate for them (see [Troubleshooting](troubleshooting.md#apps-and-sites)).
+
 ## Password protection
 
 Any static site or Docker app can be put behind HTTP basic auth:
