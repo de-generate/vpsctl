@@ -10,6 +10,13 @@ step_ssh() {
   check_firewall_allows_ssh
 
   log "Hardening SSH server"
+  # Keep the current (working) drop-in, so a rejected config can be rolled back.
+  local backup="" changed
+  if [[ -f $SSHD_DROPIN ]]; then
+    backup=$(mktemp)
+    cp -p "$SSHD_DROPIN" "$backup"
+  fi
+
   # sshd uses the FIRST value it reads for each option and includes sshd_config.d/*.conf
   # in alphabetical order. The "00-" prefix makes our settings win over files such as
   # cloud-init's 50-cloud-init.conf (which often sets PasswordAuthentication yes).
@@ -43,14 +50,29 @@ PermitUserEnvironment no
 ClientAliveInterval 300
 ClientAliveCountMax 2
 EOF
+  changed=$WRITE_FILE_CHANGED
 
   # sshd -t needs this directory, which doesn't exist yet when sshd is socket-activated.
   mkdir -p /run/sshd
   if ! sshd -t; then
-    rm -f "$SSHD_DROPIN"
-    die "sshd rejected the new configuration. Removed $SSHD_DROPIN, nothing was changed."
+    if [[ -n $backup ]]; then mv "$backup" "$SSHD_DROPIN"; else rm -f "$SSHD_DROPIN"; fi
+    die "sshd rejected the new configuration. Restored the previous $SSHD_DROPIN; sshd was not restarted."
+  fi
+  rm -f "$backup"
+
+  # Restart only when needed: the config changed, or nothing listens on SSH_PORT yet
+  # (e.g. an earlier run was interrupted between writing the config and restarting).
+  if $changed || [[ -z $(ss -Hltn "sport = :$SSH_PORT") ]]; then
+    restart_sshd
+  else
+    info "SSH config unchanged, sshd not restarted"
   fi
 
+  info "Effective settings:"
+  print_sshd_settings
+}
+
+restart_sshd() {
   # Ubuntu 22.10+ starts sshd through ssh.socket, whose listening port is generated
   # from sshd_config. Reload the generators so a changed Port takes effect.
   if systemctl is-enabled --quiet ssh.socket 2>/dev/null; then
@@ -58,9 +80,7 @@ EOF
     systemctl restart ssh.socket
   fi
   systemctl restart ssh.service
-
-  info "Effective settings:"
-  print_sshd_settings
+  info "sshd restarted (open sessions stay connected)"
 }
 
 # At least one user in AllowUsers must be able to log in with a key, or the new
