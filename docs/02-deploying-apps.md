@@ -154,18 +154,29 @@ A hostname can only belong to one app or static site; deploys that would take ov
 
 ## robots.txt
 
-Every site answers `/robots.txt` with a global file, [`config/robots.txt`](../config/robots.txt) in this repo. By default it allows all crawlers, so sites can be indexed by search engines.
+Every site answers `/robots.txt` with a global file, [`config/robots.txt`](../config/robots.txt) in this repo. It's served publicly as-is, so it contains no comments.
 
 - **Static sites** can ship their own `robots.txt`; it takes precedence over the global one.
 - **Docker apps** always get the global file, even if the app serves its own.
 - `robots.txt` is reachable **without** the password on password-protected sites, so crawlers get a clear answer instead of a 401.
 
-To change it, edit `config/robots.txt` and run `sudo bash setup.sh caddy` on the server (no restart needed). E.g. to keep all crawlers out:
+The default is an **allowlist**: everything is disallowed (`User-agent: *`), except for named crawlers:
+
+- **Search engines:** Googlebot, Bingbot (also behind DuckDuckGo, Ecosia and Yahoo results), DuckDuckBot, Applebot (Siri/Spotlight), MojeekBot.
+- **Link previews** for links shared in chats and social media: Twitterbot, facebookexternalhit, LinkedInBot, Slackbot, Discordbot, TelegramBot. Without them, shared links show no title or image on the services that respect `robots.txt`.
+
+Everything else falls under `User-agent: *` and is disallowed. That includes AI training crawlers (GPTBot, ClaudeBot, CCBot, …), new ones nobody has listed yet, and the AI-use tokens `Google-Extended` and `Applebot-Extended`. Those tokens let Google and Apple keep indexing a site for search while it opts out of AI training.
+
+Keep in mind that `robots.txt` is a request, not access control. Well-behaved crawlers follow it; scrapers that ignore it aren't stopped. Actually blocking user agents in Caddy is listed in [future-improvements.md](future-improvements.md#deploying-apps-vps--vpsctl).
+
+To change it, edit `config/robots.txt` and run `sudo bash setup.sh caddy` on the server (no restart needed). To allow another crawler, add a `User-agent:` line to the first group. To keep all crawlers out:
 
 ```
 User-agent: *
 Disallow: /
 ```
+
+The opposite approach, allowing everything and blocking known AI crawlers by name, is maintained as a list at [ai-robots-txt/ai.robots.txt](https://github.com/ai-robots-txt/ai.robots.txt). It needs regular updates, while the allowlist doesn't.
 
 Hostnames that don't serve anything can't answer either, because there is no certificate for them (see [Troubleshooting](troubleshooting.md#apps-and-sites)).
 

@@ -22,11 +22,8 @@ step_caddy() {
   local caddyfile_changed=$WRITE_FILE_CHANGED
 
   # Files served on every site (see the global_robots snippet). Read on each request,
-  # so no reload is needed when they change.
-  write_file "$CADDY_DIR/etc/global/robots.txt" < <(
-    printf '%s\n' "$MANAGED_HEADER"
-    cat "$SCRIPT_DIR/config/robots.txt"
-  )
+  # so no reload is needed when they change. Served publicly as-is, so no managed header.
+  write_file "$CADDY_DIR/etc/global/robots.txt" <"$SCRIPT_DIR/config/robots.txt"
 
   write_file "$CADDY_DIR/compose.yaml" <<EOF
 $MANAGED_HEADER

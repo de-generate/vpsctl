@@ -23,6 +23,7 @@ Ideas that were deliberately left out of the first version:
 - **Default target**: a `VPS_TARGET` environment variable so the SSH target can be omitted.
 - **Less privilege for vpsctl**: the `vps` user is in the `docker` group, which is root-equivalent (see [security.md](security.md)). Alternatives: rootless Docker, or a narrow `sudo` rule that only allows `vpsctl` (needs passwordless sudo for that one command, since deploys run non-interactively).
 - **Update notifications**: report failed weekly auto-updates (e.g. to a self-hosted ntfy) instead of only `vps <target> ls` and the journal.
+- **Blocking crawlers in Caddy**: `robots.txt` only asks; a Caddy matcher on the `User-Agent` header (e.g. returning 403 for known AI scrapers on every site) would actually enforce it, for crawlers that identify themselves honestly.
 - **Access logs** for static sites and apps (Caddy `log` directive, with rotation).
 - **App catalog**: pre-configured compose files for common self-hosted tools (Uptime Kuma, IT-Tools, …), possibly in a separate repo.
 - **Web UI**: something like Dockge pointed at `/srv/docker`, reachable only through an SSH tunnel.
