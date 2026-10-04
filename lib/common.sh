@@ -16,13 +16,40 @@ require_root() {
 require_ubuntu() {
   # shellcheck source=/dev/null
   . /etc/os-release
-  if [[ ${ID:-} != ubuntu ]]; then
-    warn "This script targets Ubuntu Server, detected '${PRETTY_NAME:-unknown}'. Continuing anyway."
+  [[ ${ID:-} == ubuntu ]] || die "This script needs Ubuntu Server, detected '${PRETTY_NAME:-unknown}'."
+  # full-upgrade stays within a release, so an old release would stay old.
+  (( ${VERSION_ID%%.*} >= 24 )) \
+    || die "Ubuntu ${VERSION_ID} is too old (24.04 or newer needed). Use a newer image," \
+      "or upgrade the release on purpose first (do-release-upgrade)."
+}
+
+# apt-get that waits instead of failing when apt is busy, e.g. with cloud-init or
+# unattended-upgrades right after the first boot of a fresh (old) image.
+apt_get() {
+  local attempt=0
+  # DPkg::Lock::Timeout covers the dpkg lock, but not the package lists lock that
+  # "apt-get update" needs, hence the retries.
+  until apt-get -o DPkg::Lock::Timeout=600 "$@"; do
+    (( ++attempt < 30 )) || die "apt-get $* kept failing. Is another apt process stuck?"
+    warn "apt-get failed (apt busy?), retrying in 10 seconds ($attempt/30)..."
+    sleep 10
+  done
+}
+
+# Why a reboot is needed, e.g. "running kernel 6.8.0-31-generic, installed 6.8.0-85-generic".
+reboot_reason() {
+  local running newest
+  running=$(uname -r)
+  newest=$(find /boot -maxdepth 1 -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null | sed 's/^vmlinuz-//' | sort -V | tail -n1)
+  if [[ -n $newest && $newest != "$running" ]]; then
+    echo "running kernel $running, installed $newest"
+  else
+    echo "updated: $(sort -u /var/run/reboot-required.pkgs 2>/dev/null | paste -sd, - | sed 's/,/, /g')"
   fi
 }
 
 apt_install() {
-  apt-get install -y --no-install-recommends "$@"
+  apt_get install -y --no-install-recommends "$@"
 }
 
 # write_file PATH [MODE] - writes stdin to PATH (root-owned), creating parent dirs.

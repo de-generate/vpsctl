@@ -142,9 +142,13 @@ main() {
 
         vps ${VPS_USER}@${ip:-<server-ip>} ls
 EOF
+  # Last thing printed on purpose, so it can't scroll away.
   if [[ -f /var/run/reboot-required ]]; then
-    echo
-    warn "A reboot is required. After confirming the login works: sudo reboot"
+    printf '\n\033[1;33m%s\033[0m\n' "  ┌─ REBOOT REQUIRED ─────────────────────────────────────────────"
+    printf '\033[1;33m  │\033[0m %s\n' \
+      "Reason: $(reboot_reason)" \
+      "After confirming the new login works (see above), run: sudo reboot"
+    printf '\033[1;33m%s\033[0m\n' "  └───────────────────────────────────────────────────────────────"
   fi
 }
 

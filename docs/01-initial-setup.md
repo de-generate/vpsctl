@@ -59,6 +59,8 @@ The script asks once for a password for the `vps` user. SSH login is key-only, s
 
 Steps run in this order: `packages → system → user → upgrades → firewall → fail2ban → docker → caddy → vpsctl → ssh`. SSH is hardened last, and only if the new user has a valid key.
 
+**Fresh or old images:** the script first waits for cloud-init to finish the first boot, and waits whenever apt is busy (e.g. with automatic updates running in the background) instead of failing. It then upgrades all packages. If that needs a reboot (usually a new kernel), setup simply continues on the current kernel and shows a **REBOOT REQUIRED** box at the very end. Ubuntu releases older than 24.04 are refused, because the upgrade stays within a release.
+
 ## 5. Check the login (do not skip)
 
 **Keep the root session open.** In a new terminal:

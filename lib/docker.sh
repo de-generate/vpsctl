@@ -10,7 +10,7 @@ step_docker() {
   local pkg
   for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
     if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'ok installed'; then
-      apt-get remove -y "$pkg"
+      apt_get remove -y "$pkg"
     fi
   done
 
@@ -41,7 +41,7 @@ Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
-  apt-get update
+  apt_get update
   apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   log "Configuring the Docker daemon"
