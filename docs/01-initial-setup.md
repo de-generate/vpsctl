@@ -47,7 +47,7 @@ cp setup.conf.example setup.conf
 nano setup.conf
 ```
 
-Each option is documented in [`setup.conf.example`](../setup.conf.example). Usually you only set `SSH_PUBKEY` (unless the provider already installed your key), `VPS_HOSTNAME`, `VPS_TIMEZONE` and `ACME_EMAIL` (for Let's Encrypt expiry notices).
+`setup.sh` refuses to run without `setup.conf`, so a missing or misplaced config can't silently fall back to defaults. Each option is documented in [`setup.conf.example`](../setup.conf.example). Usually you only set `SSH_PUBKEY` (unless the provider already installed your key), `VPS_HOSTNAME`, `VPS_TIMEZONE` and `ACME_EMAIL` (for Let's Encrypt expiry notices).
 
 ## 4. Run
 

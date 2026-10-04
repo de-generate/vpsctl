@@ -37,12 +37,12 @@ for step in "${STEPS[@]}"; do
 done
 
 load_config() {
-  if [[ -f $SCRIPT_DIR/setup.conf ]]; then
-    # shellcheck source=setup.conf.example
-    source "$SCRIPT_DIR/setup.conf"
-  else
-    warn "No setup.conf found, using defaults (see setup.conf.example)."
-  fi
+  # Required, so a missing or misplaced config can't silently apply defaults
+  # (e.g. after moving the repo, which would reset SSH_PORT or the hostname).
+  [[ -f $SCRIPT_DIR/setup.conf ]] \
+    || die "No setup.conf found in $SCRIPT_DIR. Create it first: cp setup.conf.example setup.conf"
+  # shellcheck source=setup.conf.example
+  source "$SCRIPT_DIR/setup.conf"
 
   VPS_USER=${VPS_USER:-vps}
   SSH_PUBKEY=${SSH_PUBKEY:-}

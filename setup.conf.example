@@ -1,5 +1,6 @@
 # Copy to setup.conf and adjust. setup.conf is git-ignored.
-# Every value is optional; the defaults are shown.
+# setup.sh refuses to run without setup.conf, but every value in it is optional;
+# the defaults are shown.
 
 # Name of the non-root admin user (gets sudo, used for SSH login).
 VPS_USER="vps"
