@@ -437,14 +437,25 @@ cmd_deploy_static() {
 
   # The password route must be active before the files appear, otherwise the catch-all
   # would serve them publicly - for a moment, or for good if a later step fails.
+  local had_route=false
+  if [[ -f $SITES_DIR/static-$host.caddy ]]; then had_route=true; fi
   apply_auth "static-$host"
   sync_static_route "$host" --pending
   replace_dir "$staging" "$STATIC_DIR/$host"
 
   info "Deployed static site: https://$host"
   if [[ ! -f $AUTH_DIR/static-$host ]]; then
+    # Served by the catch-all: the certificate is issued during the first request.
     info "(On the first visit, the certificate is issued - that request can take a few seconds.)"
+  elif ! $had_route; then
+    # Own route: the certificate is issued in the background, HTTPS fails until then.
+    cert_notice
   fi
+}
+
+cert_notice() {
+  info "  (New domains: the certificate is being issued in the background. Until it's ready -"
+  info "   usually within a minute - HTTPS connections fail. Problems: vpsctl logs caddy)"
 }
 
 cmd_deploy_docker() {
@@ -478,14 +489,24 @@ cmd_deploy_docker() {
     || die "docker compose up failed. Fix the problem and deploy again (logs: vpsctl logs $name)."
 
   if [[ -z $routes ]]; then remove_app_network "$name"; fi
+  local old_domains new_domains=false
+  old_domains=" $(snippet_domains "$SITES_DIR/docker-$name.caddy") "
   sync_docker_route "$name" "$routes"
 
   local ports
   ports=$(published_ports "$name")
   info "Deployed $name."
   while read -r upstream domains; do
-    for d in ${domains//,/ }; do info "  https://$d  ->  $upstream"; done
+    for d in ${domains//,/ }; do
+      if [[ $old_domains == *" $d "* ]]; then
+        info "  https://$d  ->  $upstream"
+      else
+        info "  https://$d  ->  $upstream  (new)"
+        new_domains=true
+      fi
+    done
   done <<<"$routes"
+  if $new_domains; then cert_notice; fi
   if [[ -n $ports ]]; then
     info "  published ports: ${ports//,/, }"
     info "  (Docker opens these to the internet regardless of UFW. Also allow them in the provider firewall.)"

@@ -57,7 +57,7 @@ To prevent it, keep `.gitattributes` and set your editor to LF for this repo.
 
 **Site shows "Not found" (static).** The folder name must equal the hostname exactly: check `vps <target> ls`. DNS must point at the server: `nslookup foo.example.com`.
 
-**Certificate errors / site doesn't load over HTTPS.** Look at the proxy logs: `vps <target> logs caddy`. Common causes:
+**Certificate errors / site doesn't load over HTTPS.** Right after deploying a *new* domain this is normal: Docker apps and password-protected sites get their certificate in the background, and until it arrives (usually within a minute) HTTPS connections fail (`curl` reports `000`). If it persists, look at the proxy logs: `vps <target> logs caddy`. Common causes:
 - DNS doesn't point at this server yet (or still has the old IP cached).
 - Port 80 or 443 is closed in the provider firewall.
 - Let's Encrypt rate limits after many failed attempts. Wait an hour.
