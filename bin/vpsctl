@@ -42,6 +42,10 @@ Usage: vpsctl <command> [args]
   ls                                List static sites and Docker apps
   logs <name> [compose logs args]   Logs of a Docker app ("caddy" for the proxy)
   restart <name>                    Restart a Docker app
+  compose <name> <args...>          Any docker compose command for an app (e.g. up -d,
+                                    exec -T db psql), with the vpsctl override applied.
+                                    Use this instead of a plain "docker compose" in the
+                                    app folder, which would drop the app's routing network.
   update <name> | --all [--auto]    Pull images, rebuild with fresh base images, restart.
                                     --auto: only pull image-based services that don't have
                                     the label vps.auto-update: "false" (used by the timer)
@@ -552,26 +556,49 @@ app_status() { # NAME
   fi
 }
 
-cmd_ls() {
-  local d host name domains ports
-  {
-    printf 'TYPE\tNAME\tDOMAINS\tPORTS\tSTATUS\tPASSWORD\n'
-    for d in "$STATIC_DIR"/*/; do
-      [[ -d $d ]] || continue
-      host=$(basename "$d")
-      printf 'static\t%s\t%s\t-\t-\t%s\n' "$host" "$host" "$(has_auth "static-$host")"
-    done
-    for d in "$DOCKER_DIR"/*/; do
-      [[ -d $d ]] || continue
-      name=$(basename "$d")
-      domains=$(snippet_domains "$SITES_DIR/docker-$name.caddy")
-      domains=${domains// /,}
-      ports=$(published_ports "$name")
-      printf 'docker\t%s\t%s\t%s\t%s\t%s\n' \
-        "$name" "${domains:--}" "${ports:--}" "$(app_status "$name")" "$(has_auth "docker-$name")"
-    done
-  } | column -t -s $'\t'
+# Prints what breaks the routes of a Docker app (nothing if they're fine): routed
+# containers that aren't on the app network - e.g. recreated by a plain "docker compose
+# up" without the vpsctl override - or Caddy itself not being on it.
+routing_problem() { # NAME
+  local net=$APP_NETWORK_PREFIX$1 container networks missing=()
+  [[ -f $SITES_DIR/docker-$1.caddy ]] || return 0
+  while read -r container; do
+    networks=$(docker inspect -f '{{json .NetworkSettings.Networks}}' "$container" 2>/dev/null) || continue
+    jq -e --arg n "$net" 'has($n)' >/dev/null <<<"$networks" || missing+=("$container")
+  done < <(sed -n 's/^\t*reverse_proxy \([^:]*\):.*/\1/p' "$SITES_DIR/docker-$1.caddy")
+  if (( ${#missing[@]} )); then
+    echo "${missing[*]} not on $net (recreated without the override?) - fix: vpsctl compose $1 up -d"
+  elif ! caddy_on_network "$net"; then
+    echo "caddy not on $net - fix: vpsctl sync"
+  fi
+}
 
+cmd_ls() {
+  local d host name domains ports status problem rows problems=()
+  rows=$'TYPE\tNAME\tDOMAINS\tPORTS\tSTATUS\tPASSWORD\n'
+  for d in "$STATIC_DIR"/*/; do
+    [[ -d $d ]] || continue
+    host=$(basename "$d")
+    rows+=$(printf 'static\t%s\t%s\t-\t-\t%s' "$host" "$host" "$(has_auth "static-$host")")$'\n'
+  done
+  for d in "$DOCKER_DIR"/*/; do
+    [[ -d $d ]] || continue
+    name=$(basename "$d")
+    domains=$(snippet_domains "$SITES_DIR/docker-$name.caddy")
+    domains=${domains// /,}
+    ports=$(published_ports "$name")
+    status=$(app_status "$name")
+    problem=$(routing_problem "$name")
+    if [[ -n $problem ]]; then
+      status+=", NOT ROUTED"
+      problems+=("$name: $problem")
+    fi
+    rows+=$(printf 'docker\t%s\t%s\t%s\t%s\t%s' \
+      "$name" "${domains:--}" "${ports:--}" "$status" "$(has_auth "docker-$name")")$'\n'
+  done
+  printf '%s' "$rows" | column -t -s $'\t'
+
+  for problem in "${problems[@]}"; do warn "$problem"; done
   if [[ $(docker inspect -f '{{.State.Running}}' "$CADDY_CONTAINER" 2>/dev/null) != true ]]; then
     warn "The caddy container is not running - nothing is reachable. Check: vpsctl logs caddy"
   fi
@@ -605,6 +632,22 @@ cmd_logs() {
 cmd_restart() {
   require_app "${1:-}"
   dc "$1" restart
+}
+
+# Any docker compose command for an app, with the right project name and the vpsctl
+# override - the safe way to run "up", "exec", "run", ... by hand. Deliberately takes no
+# lock: it may be long-running or interactive (logs -f, exec -it).
+cmd_compose() {
+  require_app "${1:-}"
+  local name=$1 status=0
+  shift
+  (( $# )) || die "Usage: vpsctl compose <name> <docker compose args...>"
+  # The app network is external to the project, so it must exist before "up".
+  if [[ $name != caddy && -f $OVERRIDES_DIR/$name.yaml ]]; then connect_app_network "$name"; fi
+  dc "$name" "$@" || status=$?
+  # Recreating the Caddy container drops its runtime connections to the app networks.
+  if [[ $name == caddy ]]; then reconnect_app_networks; fi
+  return "$status"
 }
 
 update_app() { # NAME AUTO
@@ -794,6 +837,7 @@ main() {
     ls|list) cmd_ls ;;
     logs) cmd_logs "$@" ;;
     restart) cmd_restart "$@" ;;
+    compose) cmd_compose "$@" ;;
     update) cmd_update "$@" ;;
     rm|remove) cmd_rm "$@" ;;
     sync) cmd_sync ;;

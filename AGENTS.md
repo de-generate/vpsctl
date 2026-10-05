@@ -27,7 +27,8 @@ Scripts and docs for bootstrapping and operating a general-purpose Ubuntu Server
   - App names never contain dots; that's how they're told apart from hostnames.
   - Every change to a route goes through `install_snippet`, which reloads Caddy and rolls back on failure.
   - In generated routes, `basic_auth` lives inside a catch-all `handle`, after the `/robots.txt` handler, so `robots.txt` never needs the password. Changing the route format needs a `vpsctl sync` on the server, which the setup run does.
-  - Mutating commands take `lock` first.
+  - Mutating commands take `lock` first. Exception: `compose` (a passthrough that may be long-running or interactive).
+  - App containers must only be (re)created with the override (`dc`), never with a plain `docker compose`; otherwise routed services lose their app network.
   - A password route must be active before the content it protects becomes reachable.
   - Apps only share a network with Caddy (`vps-<app>`), never with each other.
 - **The Caddy catch-all hostname regex** in `lib/caddy.sh` is a security boundary (Host-header path traversal). Keep it in sync with `HOST_RE`.

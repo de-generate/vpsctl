@@ -67,9 +67,11 @@ To prevent it, keep `.gitattributes` and set your editor to LF for this repo.
 **502 Bad Gateway (Docker app).** Caddy can't reach the container:
 - `vps <target> ls`: is the app running? `vps <target> logs <name>` shows why not.
 - `vps.http-port` must be the port the app listens on *inside* the container, and the app must listen on `0.0.0.0`, not `127.0.0.1`.
-- Caddy must be connected to the app's network: `docker inspect -f '{{json .NetworkSettings.Networks}}' caddy` should list `vps-<name>`. If not (e.g. after recreating the Caddy container by hand), run `vps <target> sync`.
+- `vps <target> ls` shows `NOT ROUTED` (and a warning with the fix) if Caddy and the app don't share the app's network. Caddy's log then says `lookup <container> … server misbehaving`. Two causes:
+  - The app's containers were recreated by a plain `docker compose up` without the vpsctl override: run `vps <target> compose <name> up -d` (see [Running docker compose by hand](02-deploying-apps.md#running-docker-compose-by-hand)).
+  - Caddy lost its connection to the network (e.g. its container was recreated by hand): run `vps <target> sync`.
 
-**Routes are missing or stale**, e.g. after running `docker compose` by hand or restoring files: `vps <target> sync` regenerates all routes and compose overrides from what's in `/srv/docker` and `/srv/static`.
+**Routes are missing or stale**, e.g. after restoring files: `vps <target> sync` regenerates all routes and compose overrides from what's in `/srv/docker` and `/srv/static`.
 
 **`Cannot access Docker as 'vps'`.** Group membership only applies to new logins. Disconnect and reconnect (or reboot after setup).
 

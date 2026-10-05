@@ -19,6 +19,8 @@ Commands:
   ls                                       List static sites and Docker apps
   logs <name> [-f] [--tail N]              Logs of a Docker app ("caddy" for the proxy)
   restart <name>                           Restart a Docker app
+  compose <name> <args...>                 Any docker compose command for an app, e.g.
+                                           compose wiki exec -T db psql -U wiki < dump.sql
   update <name> | --all                    Pull new images, rebuild with fresh base images, restart
   rm <name|hostname> [--volumes] [--yes]   Remove an app or site (--volumes also deletes named volumes)
   sync                                     Regenerate all routes from what's on the server
@@ -131,12 +133,14 @@ cmd_rm() {
   remote "${args[@]}"
 }
 
-cmd_logs() {
-  # With a terminal, allocate one remotely too, so Ctrl+C stops `logs -f` on the server.
+# Like remote, but with a terminal on the server when we have one: Ctrl+C then stops
+# `logs -f`, and `compose … exec -it` works. Redirected input (e.g. `< dump.sql`) still
+# goes through as plain stdin.
+remote_tty() {
   if [[ -t 0 && -t 1 ]]; then
-    ssh -t -- "$TARGET" "vpsctl logs$(printf ' %q' "$@")"
+    ssh -t -- "$TARGET" "vpsctl$(printf ' %q' "$@")"
   else
-    remote logs "$@"
+    remote "$@"
   fi
 }
 
@@ -153,7 +157,7 @@ main() {
   case $cmd in
     deploy) cmd_deploy "$@" ;;
     rm|remove) cmd_rm "$@" ;;
-    logs) cmd_logs "$@" ;;
+    logs|compose) remote_tty "$cmd" "$@" ;;
     *) remote "$cmd" "$@" ;;
   esac
 }

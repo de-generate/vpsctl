@@ -207,6 +207,7 @@ vps my-vps logs my-api            # last 200 lines
 vps my-vps logs my-api -f         # follow (Ctrl+C to stop)
 vps my-vps logs caddy             # the reverse proxy, for certificate problems
 vps my-vps restart my-api
+vps my-vps compose my-api ps      # any docker compose command, see below
 vps my-vps update my-api          # pull new images + rebuild with fresh base images
 vps my-vps update --all
 vps my-vps rm todo.example.com    # asks for confirmation (--yes skips it)
@@ -216,6 +217,21 @@ vps my-vps sync                   # regenerate all routes (see troubleshooting)
 ```
 
 When logged in to the server, the same commands are available as `vpsctl …` (e.g. `vpsctl ls`).
+
+### Running docker compose by hand
+
+**Don't run a plain `docker compose up` in `/srv/docker/<name>`.** vpsctl attaches routed services to the app's network through a generated override file (`/srv/vps/overrides/<name>.yaml`) that plain `docker compose` doesn't know about. Any command that recreates containers (`up` after a change, `down` + `up`, `up --force-recreate`) then drops the network, and the site answers with **502**. `vps <target> ls` flags this as `NOT ROUTED`.
+
+Use `compose` instead. It runs any `docker compose` command with the right project name and the override:
+
+```bash
+vps my-vps compose wiki up -d
+vps my-vps compose wiki exec db psql -U wiki                    # interactive shell
+vps my-vps compose wiki exec -T db psql -U wiki wiki < dump.sql   # restore a database dump
+vps my-vps compose wiki stop wiki
+```
+
+On the server, the same works as `vpsctl compose wiki up -d`. Commands that don't recreate containers (`exec`, `logs`, `ps`, `stop`, `start`, `restart`) are harmless either way.
 
 ## Updates
 
