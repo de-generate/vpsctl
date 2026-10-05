@@ -256,6 +256,32 @@ Both locations are what a backup needs to cover later.
 - Extra patterns can go in a `.vpsignore` file in the folder (tar exclude patterns, one per line, e.g. `*.log`, `tmp`).
 - `.env` files **are** uploaded on purpose: that's how secrets reach the server without being in git. On the server they're made readable only by the `vps` user.
 
+### Secrets
+
+Put passwords and API keys in the app's **`.env`** file and pass them to the containers through variables:
+
+```
+# .env (next to compose.yaml; keep it out of git)
+DB_PASSWORD=change-me
+```
+
+```yaml
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+  app:
+    environment:
+      DB_PASS: ${DB_PASSWORD}
+```
+
+Compose reads `.env` as the `vps` user and hands the values to the containers. Nothing on the server stays readable for other users. The values are visible to `docker inspect`, but only to members of the `docker` group, who can do anything on the server anyway.
+
+Avoid **other secret files** in the app folder (e.g. a bind-mounted `.db-secret` for `*_FILE` variables). vpsctl leaves them as uploaded, which makes them readable by every user on the server. They can't simply be made owner-only either: the container usually reads them as a different user (e.g. `postgres`), which would then be locked out. Compose's `secrets:` doesn't help here: outside Docker Swarm it's just a bind mount with the same permissions.
+
+On a single-user server like this one that's a small risk (see [security.md](security.md)). The bigger risk is committing such a file to git by accident, so use `.env`, which the usual `.gitignore` templates already cover.
+
 ## Non-HTTP services (game servers, voice chat, …)
 
 Services that don't speak HTTP can't go through Caddy. They publish a port directly instead, e.g. a Mumble server:

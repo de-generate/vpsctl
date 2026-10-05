@@ -35,7 +35,7 @@ What protects what on a server set up with this repo, and what doesn't. The deta
 
 ## Secrets and data
 
-- `.env` files uploaded with Docker apps are readable only by the `vps` user. Password hashes for basic auth are in `/srv/vps/auth/` (mode 600).
+- `.env` files uploaded with Docker apps are readable only by the `vps` user. Other uploaded files keep normal permissions, so secrets belong in `.env` (see [Secrets](02-deploying-apps.md#secrets)). Password hashes for basic auth are in `/srv/vps/auth/` (mode 600).
 - There are no backups yet (see [future-improvements.md](future-improvements.md#backups)).
 
 ## Updates
