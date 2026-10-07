@@ -7,6 +7,7 @@ Scripts and docs for setting up and running a general-purpose Ubuntu Server VPS 
 | Step       | What it does |
 |------------|--------------|
 | `packages` | Full system upgrade, base tooling (curl, git, htop, ncdu, jq, tmux, …) |
+| `snap`     | Removes snapd and blocks its reinstall; refuses while snaps are installed |
 | `system`   | Hostname, timezone, NTP time sync, swap file, kernel network hardening (sysctl) |
 | `user`     | Non-root admin user (`vps` by default) with sudo and your SSH key(s) |
 | `upgrades` | Automatic security updates, optional automatic reboot at night |

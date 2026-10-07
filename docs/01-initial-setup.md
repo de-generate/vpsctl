@@ -57,9 +57,21 @@ bash setup.sh
 
 The script asks once for a password for the `vps` user. SSH login is key-only, so this password is only used for `sudo`. Use a strong one and store it in your password manager.
 
-Steps run in this order: `packages → system → user → upgrades → firewall → fail2ban → docker → caddy → vpsctl → ssh`. SSH is hardened last, and only if the new user has a valid key.
+Steps run in this order: `packages → snap → system → user → upgrades → firewall → fail2ban → docker → caddy → vpsctl → ssh`. SSH is hardened last, and only if the new user has a valid key.
 
 **Fresh or old images:** the script first waits for cloud-init to finish the first boot, and waits whenever apt is busy (e.g. with automatic updates running in the background) instead of failing. It then upgrades all packages. If that needs a reboot (usually a new kernel), setup simply continues on the current kernel and shows a **REBOOT REQUIRED** box at the very end. Ubuntu releases older than 24.04 are refused, because the upgrade stays within a release.
+
+**Snaps:** the `snap` step removes snapd, because nothing in this setup uses it. Fresh images usually come with a few snaps (`core22`, `snapd`, sometimes `lxd`), and the step never removes them on its own: it lists them, warns, and leaves snapd installed. Check that nothing you need is among them (some providers ship their agent as a snap; Canonical Livepatch is a snap too), then remove them and run the step again:
+
+```bash
+snap list --all
+snap remove --purge lxd           # apps first,
+snap remove --purge core22        # then base snaps,
+snap remove --purge snapd         # snapd last
+bash setup.sh snap
+```
+
+To skip the review, set `REMOVE_SNAP_FORCE="true"`, or keep snapd with `REMOVE_SNAP="false"`.
 
 ## 5. Check the login (do not skip)
 
@@ -105,6 +117,7 @@ Now `ssh vps` is enough. The same name works for the deploy client: `vps vps ls`
 
 | File | Step |
 |------|------|
+| `snapd` purged (with `/snap`, `/var/lib/snapd`), `/etc/apt/preferences.d/no-snapd` | snap |
 | `/etc/hostname`, the `127.0.1.1` line in `/etc/hosts`, `/etc/cloud/cloud.cfg.d/99-vps-setup-hostname.cfg` (only with `VPS_HOSTNAME`) | system |
 | `/swapfile`, `/etc/fstab` | system |
 | `/etc/sysctl.d/99-vps-setup.conf` | system |

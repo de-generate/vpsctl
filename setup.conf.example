@@ -30,6 +30,14 @@ VPS_TIMEZONE="Etc/UTC"
 SWAP_SIZE="2G"
 SWAPPINESS="10"
 
+# Remove snapd (nothing in this setup uses snaps) and keep apt from installing
+# it again. If any snaps are installed (snap list --all), the step only warns
+# and leaves snapd alone: check them and remove them by hand first. Fresh
+# images usually come with a few (core*, snapd, sometimes lxd).
+# REMOVE_SNAP_FORCE="true" removes snapd together with all installed snaps.
+REMOVE_SNAP="true"
+REMOVE_SNAP_FORCE="false"
+
 # Reboot automatically when a security update needs it (e.g. a new kernel).
 AUTO_REBOOT="true"
 AUTO_REBOOT_TIME="04:00"

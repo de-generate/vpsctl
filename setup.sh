@@ -14,10 +14,11 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 # Canonical order. ssh is last so a lockout can't happen halfway through.
-STEPS=(packages system user upgrades firewall fail2ban docker caddy vpsctl ssh)
+STEPS=(packages snap system user upgrades firewall fail2ban docker caddy vpsctl ssh)
 
 declare -A STEP_DESCRIPTIONS=(
   [packages]="Upgrade the system and install base packages"
+  [snap]="Remove snapd and block its reinstall (refuses if snaps are installed)"
   [system]="Hostname, timezone, time sync, swap, sysctl hardening"
   [user]="Create the sudo admin user and install SSH keys"
   [upgrades]="Automatic security updates (unattended-upgrades)"
@@ -59,6 +60,8 @@ load_config() {
   AUTO_UPDATE=${AUTO_UPDATE:-true}
   AUTO_UPDATE_SCHEDULE=${AUTO_UPDATE_SCHEDULE:-Sun *-*-* 03:00}
   FAIL2BAN_IGNOREIP=${FAIL2BAN_IGNOREIP:-}
+  REMOVE_SNAP=${REMOVE_SNAP:-true}
+  REMOVE_SNAP_FORCE=${REMOVE_SNAP_FORCE:-false}
 
   # Values end up in system config files, so validate all of them.
   local user_re='^[a-z_][a-z0-9_-]*$' user
@@ -78,6 +81,8 @@ load_config() {
   [[ $AUTO_REBOOT =~ ^(true|false)$ ]] || die "AUTO_REBOOT must be 'true' or 'false'."
   [[ $DOCKER_AUTO_UPGRADE =~ ^(true|false)$ ]] || die "DOCKER_AUTO_UPGRADE must be 'true' or 'false'."
   [[ $AUTO_UPDATE =~ ^(true|false)$ ]] || die "AUTO_UPDATE must be 'true' or 'false'."
+  [[ $REMOVE_SNAP =~ ^(true|false)$ ]] || die "REMOVE_SNAP must be 'true' or 'false'."
+  [[ $REMOVE_SNAP_FORCE =~ ^(true|false)$ ]] || die "REMOVE_SNAP_FORCE must be 'true' or 'false'."
   systemd-analyze calendar "$AUTO_UPDATE_SCHEDULE" &>/dev/null || die "Invalid AUTO_UPDATE_SCHEDULE '$AUTO_UPDATE_SCHEDULE'."
   [[ -z $ACME_EMAIL || $ACME_EMAIL =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]] || die "Invalid ACME_EMAIL '$ACME_EMAIL'."
   [[ -e /usr/share/zoneinfo/$VPS_TIMEZONE ]] || die "Unknown timezone '$VPS_TIMEZONE' (see: timedatectl list-timezones)."
